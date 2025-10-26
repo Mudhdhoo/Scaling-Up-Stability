@@ -35,7 +35,6 @@ class GMPERunner(Runner):
 
         # This is where the episodes are actually run.
         for episode in range(episodes):
-            start_time = time.time()
             if self.use_linear_lr_decay:
                 self.trainer.policy.lr_decay(episode, episodes)
 
@@ -75,8 +74,11 @@ class GMPERunner(Runner):
                 self.insert(data)
 
             # compute return and update network
+            start_time = time.time()
             self.compute()
             train_infos = self.train()
+            end_time = time.time()
+            print(f"Compute return and update network time: {end_time - start_time}")
 
             # post process
             total_num_steps = (
@@ -87,9 +89,6 @@ class GMPERunner(Runner):
             if episode % self.save_interval == 0 or episode == episodes - 1:
                 self.save()
 
-            end_time = time.time()
-            print(f"Episode {episode} time: {end_time - start_time}")
-            
             # log information
             if episode % self.log_interval == 0:
                 end = time.time()
@@ -99,6 +98,7 @@ class GMPERunner(Runner):
                 avg_ep_rew = np.mean(self.buffer.rewards) * self.episode_length
                 train_infos["average_episode_rewards"] = avg_ep_rew
                 print(
+                    f"Episode {episode} \t" 
                     f"Average episode rewards is {avg_ep_rew:.3f} \t"
                     f"Total timesteps: {total_num_steps} \t "
                     f"Percentage complete {total_num_steps / self.num_env_steps * 100:.3f}"
