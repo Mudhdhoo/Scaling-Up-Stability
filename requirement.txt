@@ -1,5 +1,7 @@
 gymnasium
 numpy
+torch
+torchvision
 pyglet
 PyOpenGL
 PyQt5
@@ -7,13 +9,11 @@ requests
 tensorboard
 tensorboard-plugin-wit
 tensorboardX
-torch
 torch-cluster
 torch-geometric
 torch-scatter
 torch-sparse
 torch-spline-conv
-torchvision
 tqdm
 typing
 typing-extensions
