@@ -148,7 +148,7 @@ obs_n, agent_id_n, node_obs_n, adj_n = env.reset()
 
 ## Dependencies:
 * [Multiagent-particle-envs](https://github.com/openai/multiagent-particle-envs): We have pulled the relevant folder from the repo to modify it.
-    * `pip install gym==0.10.5` (newer versions also seem to work)
+    * `pip install gymnasium==0.10.5` (newer versions also seem to work)
     * `pip install numpy-stl`
     * torch==1.11.0              
     * torch-geometric==2.0.4

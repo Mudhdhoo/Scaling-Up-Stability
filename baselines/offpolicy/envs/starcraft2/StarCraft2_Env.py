@@ -23,7 +23,7 @@ from s2clientprotocol import raw_pb2 as r_pb
 from s2clientprotocol import debug_pb2 as d_pb
 
 import random
-from gym.spaces import Discrete
+from gymnasium.spaces import Discrete
 
 races = {
     "R": sc_common.Random,

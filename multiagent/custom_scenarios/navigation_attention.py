@@ -23,7 +23,7 @@ from multiagent.scenario import BaseScenario
 
 from attention_baseline.envs.maTTenv.belief_tracker import KFbelief
 from attention_baseline.envs.maTTenv.metadata import METADATA
-from gym import spaces, logger
+from gymnasium import spaces, logger
 
 entity_mapping = {"agent": 0, "landmark": 1, "obstacle": 2}
 

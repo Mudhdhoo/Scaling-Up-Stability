@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import gym_flock
 import numpy as np
 import pdb

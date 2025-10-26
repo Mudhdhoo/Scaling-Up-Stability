@@ -143,6 +143,7 @@ def parse_args(args, parser):
 def main(args):
     parser = get_config()
     all_args, parser = parse_args(args, parser)
+
     if all_args.env_name == "GraphMPE":
         from onpolicy.config import graph_config
 
@@ -297,6 +298,8 @@ def main(args):
             print_box(runner.policy.actor, 80)
             print_box("Critic Network", 80)
             print_box(runner.policy.critic, 80)
+
+    # Begin training    
     runner.run()
 
     # post process

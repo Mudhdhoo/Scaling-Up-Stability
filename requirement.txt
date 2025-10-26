@@ -1,14 +1,13 @@
 gym==0.10.5
 numpy==1.19.4
 pyglet==1.5.26
-protobuff==3.20.0
 PyOpenGL==3.1.5
-PyQt5==5.9.2
+PyQt5
 requests==2.22.0
 tensorboard==2.4.0
 tensorboard-plugin-wit==1.7.0
 tensorboardX==2.1
-torch==1.8.1
+torch
 torch-cluster==1.5.9
 torch-geometric==2.0.4
 torch-scatter==2.0.7

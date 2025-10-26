@@ -2,7 +2,7 @@ import numpy as np
 from multiprocessing import Process, Pipe
 from .vec_env import VecEnv, CloudpickleWrapper
 
-import gym
+import gymnasium as gym
 
 
 class DummyVecEnv(VecEnv):

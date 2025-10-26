@@ -1,7 +1,7 @@
 import argparse
 from typing import Tuple, List
 
-import gym
+import gymnasium as gym
 import torch
 from torch import Tensor
 import torch.nn as nn
@@ -167,9 +167,9 @@ class GR_Actor(nn.Module):
                 actor_features.append(actor_feats_batch)
             actor_features = torch.cat(actor_features, dim=0)
         else:
-            nbd_features = self.gnn_base(node_obs, adj, agent_id)
-            actor_features = torch.cat([obs, nbd_features], dim=1)
-            actor_features = self.base(actor_features)
+            nbd_features = self.gnn_base(node_obs, adj, agent_id)         # Generate node embedding for the agent
+            actor_features = torch.cat([obs, nbd_features], dim=1)        # Concatenate agent observation with node embedding
+            actor_features = self.base(actor_features)                    # Pass through actor MLP
 
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)

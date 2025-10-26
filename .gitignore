@@ -156,3 +156,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+test.ipynb
+
+papers/*

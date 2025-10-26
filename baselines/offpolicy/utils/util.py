@@ -1,7 +1,7 @@
 import copy
-import gym
+import gymnasium as gym
 import numpy as np
-from gym.spaces import Box, Discrete, Tuple
+from gymnasium.spaces import Box, Discrete, Tuple
 
 import torch
 import torch.nn as nn

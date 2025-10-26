@@ -1,6 +1,6 @@
-import gym
-from gym import spaces, error, utils
-from gym.utils import seeding
+import gymnasium as gym
+from gymnasium import spaces, error, utils
+from gymnasium.utils import seeding
 import numpy as np
 import configparser
 from os import path

@@ -1,5 +1,5 @@
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
 from typing import Callable, List, Tuple, Dict, Union, Optional
 from multiagent.core import World, Agent

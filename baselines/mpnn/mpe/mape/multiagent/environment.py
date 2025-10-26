@@ -1,9 +1,9 @@
-import gym
-from gym import spaces
-from gym.envs.registration import EnvSpec
+import gymnasium as gym
+from gymnasium import spaces
+from gymnasium.envs.registration import EnvSpec
 import numpy as np
 from baselines.mpnn.mpe.mape.multiagent.multi_discrete import MultiDiscrete
-from gym.utils import seeding
+from gymnasium.utils import seeding
 
 
 # environment for all agents in the multiagent world
