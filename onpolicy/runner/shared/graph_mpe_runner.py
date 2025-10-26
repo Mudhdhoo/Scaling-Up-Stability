@@ -6,7 +6,7 @@ import torch
 from onpolicy.runner.shared.base_runner import Runner
 import wandb
 import imageio
-
+from loguru import logger
 
 def _t2n(x):
     return x.detach().cpu().numpy()
@@ -31,8 +31,11 @@ class GMPERunner(Runner):
             int(self.num_env_steps) // self.episode_length // self.n_rollout_threads
         )
 
+        logger.info(f"Running {episodes} episodes")
+
         # This is where the episodes are actually run.
         for episode in range(episodes):
+            start_time = time.time()
             if self.use_linear_lr_decay:
                 self.trainer.policy.lr_decay(episode, episodes)
 
@@ -84,6 +87,9 @@ class GMPERunner(Runner):
             if episode % self.save_interval == 0 or episode == episodes - 1:
                 self.save()
 
+            end_time = time.time()
+            print(f"Episode {episode} time: {end_time - start_time}")
+            
             # log information
             if episode % self.log_interval == 0:
                 end = time.time()
