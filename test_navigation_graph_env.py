@@ -43,7 +43,7 @@ def p_control_policy(obs, goal_pos):
     u = kp * error 
     u = np.clip(u, -1, 1)
 
-    return u + np.random.randn(2) * 0.1
+    return u + np.random.randn(2) * 0
 
 args = Args()
 

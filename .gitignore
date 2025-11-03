@@ -160,3 +160,5 @@ dmypy.json
 test.ipynb
 
 papers/*
+
+test.py
