@@ -15,6 +15,7 @@ from typing import List, Tuple, Union, Optional
 from torch_geometric.typing import OptPairTensor, Adj, OptTensor, Size
 import torch.jit as jit
 from .util import init, get_clones
+from loguru import logger
 
 """GNN modules"""
 
@@ -236,6 +237,7 @@ class TransformerConvNet(nn.Module):
         self.global_aggr_type = global_aggr_type
         # NOTE: reducing dimension of input by 1 because 
         # node_obs = [node_feat, entity_type]
+
         self.embed_layer = EmbedConv(input_dim=input_dim-1, 
                             num_embeddings=num_embeddings, 
                             embedding_size=embedding_size, 

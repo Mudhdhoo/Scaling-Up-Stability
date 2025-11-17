@@ -1,5 +1,6 @@
 import argparse
 from distutils.util import strtobool
+from loguru import logger
 
 
 def get_config():
@@ -256,6 +257,14 @@ def get_config():
         default="MPE",
         choices=["MPE", "GraphMPE"],
         help="specify the name of environment",
+    )
+    parser.add_argument(
+        "--discrete_action",
+        type=lambda x: x.lower() == 'true',
+        default=None,
+        help="Whether to use discrete action space. If not specified, "
+        "defaults to True (discrete) for standard training, False (continuous) for MAD policy. "
+        "Note: MAD policy requires continuous actions",
     )
     parser.add_argument(
         "--use_obs_instead_of_state",
@@ -746,6 +755,44 @@ def graph_config(args, parser):
         type=int,
         default=32,
         help="The target mini batch size to use",
+    )
+
+    # MAD Policy parameters
+    parser.add_argument(
+        "--learnable_kp",
+        action="store_true",
+        default=False,
+        help="Whether to use learnable proportional gains in the base controller",
+    )
+
+    parser.add_argument(
+        "--kp_val",
+        type=float,
+        default=0.1,
+        help="Initial value for learnable proportional gains in the base controller",
+    )
+
+    parser.add_argument(
+        "--use_mad_policy",
+        action="store_true",
+        default=False,
+        help="Whether to use MAD (Magnitude And Direction) policy "
+        "for stability-constrained RL. MAD decomposes control as u = u_base + |M(x0)| * D(neighbors)",
+    )
+
+    parser.add_argument(
+        "--use_gnn_plus_base",
+        action="store_true",
+        default=False,
+        help="Whether to use GNN plus base controller policy "
+        "GNN plus base controller policy decomposes control as u = u_base + D(neighbors) where u_base = K_p * (goal - current)",
+    )
+
+    parser.add_argument(
+        "--lru_hidden_dim",
+        type=int,
+        default=64,
+        help="Hidden dimension for LRU (Linear Recurrent Unit) in MAD policy magnitude term",
     )
 
     all_args = parser.parse_known_args(args)[0]

@@ -27,10 +27,12 @@ class ACTLayer(nn.Module):
         super(ACTLayer, self).__init__()
         self.mixed_action = False
         self.multi_discrete = False
+        self.discrete_action = False  # Track if action space is discrete (supports available_actions)
 
         if action_space.__class__.__name__ == "Discrete":
             action_dim = action_space.n
             self.action_out = Categorical(inputs_dim, action_dim, use_orthogonal, gain)
+            self.discrete_action = True
         elif action_space.__class__.__name__ == "Box":
             action_dim = action_space.shape[0]
             self.action_out = DiagGaussian(inputs_dim, action_dim, use_orthogonal, gain)
@@ -107,7 +109,13 @@ class ACTLayer(nn.Module):
             action_log_probs = torch.cat(action_log_probs, -1)
 
         else:
-            action_logits = self.action_out(x, available_actions)
+            # Only pass available_actions for discrete action spaces (Categorical)
+            if self.discrete_action:
+                action_logits = self.action_out(x, available_actions)
+            else:
+                # continous actions
+                action_logits = self.action_out(x)
+                
             actions = action_logits.mode() if deterministic else action_logits.sample()
             action_log_probs = action_logits.log_probs(actions)
 
@@ -134,7 +142,11 @@ class ACTLayer(nn.Module):
                 action_probs.append(action_prob)
             action_probs = torch.cat(action_probs, -1)
         else:
-            action_logits = self.action_out(x, available_actions)
+            # Only pass available_actions for discrete action spaces (Categorical)
+            if self.discrete_action:
+                action_logits = self.action_out(x, available_actions)
+            else:
+                action_logits = self.action_out(x)
             action_probs = action_logits.probs
 
         return action_probs
@@ -212,7 +224,11 @@ class ACTLayer(nn.Module):
             dist_entropy = torch.tensor(dist_entropy).mean()
 
         else:
-            action_logits = self.action_out(x, available_actions)
+            # Only pass available_actions for discrete action spaces (Categorical)
+            if self.discrete_action:
+                action_logits = self.action_out(x, available_actions)
+            else:
+                action_logits = self.action_out(x)
             action_log_probs = action_logits.log_probs(action)
             if active_masks is not None:
                 dist_entropy = (

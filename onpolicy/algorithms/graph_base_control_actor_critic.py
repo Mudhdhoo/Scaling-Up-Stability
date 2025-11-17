@@ -1,5 +1,5 @@
 import argparse
-from typing import Tuple, List
+from typing import Tuple
 
 import gymnasium as gym
 import torch
@@ -12,7 +12,6 @@ from onpolicy.algorithms.utils.rnn import RNNLayer
 from onpolicy.algorithms.utils.act import ACTLayer
 from onpolicy.algorithms.utils.popart import PopArt
 from onpolicy.utils.util import get_shape_from_obs_space
-from loguru import logger
 
 
 def minibatchGenerator(
@@ -31,9 +30,16 @@ def minibatchGenerator(
         )
 
 
-class GR_Actor(nn.Module):
+class GR_Base_Actor(nn.Module):
     """
-    Actor network class for MAPPO. Outputs actions given observations.
+    Actor network with proportional base controller for MAPPO.
+    Outputs actions as: u = u_base + u_gnn
+    where u_base = K_p * (goal - pos) is a proportional controller
+    and u_gnn is learned from GNN features.
+
+    IMPORTANT: Requires CONTINUOUS action space (Box).
+    Set discrete_action=False in training config.
+
     args: argparse.Namespace
         Arguments containing relevant model information.
     obs_space: (gym.Space)
@@ -43,7 +49,7 @@ class GR_Actor(nn.Module):
     edge_obs_space: (gym.Space)
         Edge dimension in graphs
     action_space: (gym.Space)
-        Action space.
+        Action space (must be Box/continuous).
     device: (torch.device)
         Specifies the device to run on (cpu/gpu).
     split_batch: (bool)
@@ -64,7 +70,7 @@ class GR_Actor(nn.Module):
         split_batch: bool = False,
         max_batch_size: int = 32,
     ) -> None:
-        super(GR_Actor, self).__init__()
+        super(GR_Base_Actor, self).__init__()
         self.args = args
         self.hidden_size = args.hidden_size
 
@@ -77,6 +83,7 @@ class GR_Actor(nn.Module):
         self.split_batch = split_batch
         self.max_batch_size = max_batch_size
         self.tpdv = dict(dtype=torch.float32, device=device)
+        self.K_p = args.kp_val
 
         obs_shape = get_shape_from_obs_space(obs_space)
         node_obs_shape = get_shape_from_obs_space(node_obs_space)[
@@ -175,9 +182,23 @@ class GR_Actor(nn.Module):
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
-        actions, action_log_probs = self.act(
+        # GNN outputs a learned adjustment (continuous action space required)
+        # For continuous action space (Box), self.act outputs 2D continuous actions
+        u_gnn, action_log_probs = self.act(
             actor_features, available_actions, deterministic
         )
+
+        # Observation structure: [vel_x, vel_y, pos_x, pos_y, goal_x, goal_y, ...]
+        current_pos = obs[:, 2:4]  # [pos_x, pos_y]
+        goal_pos = obs[:, 4:6]     # [goal_x, goal_y]
+
+        # Proportional controller: u_base = K_p * (goal - current)
+        # This provides baseline stability
+        error = goal_pos - current_pos
+        u_base = self.K_p * error  # Broadcasting K_p
+
+        # Total action: base controller + learned GNN adjustment
+        actions = u_base + u_gnn
 
         return (actions, action_log_probs, rnn_states)
 
@@ -195,6 +216,16 @@ class GR_Actor(nn.Module):
     ) -> Tuple[Tensor, Tensor]:
         """
         Compute log probability and entropy of given actions.
+
+        IMPORTANT: The 'action' parameter contains TOTAL actions (u_base + u_gnn)
+        stored in the buffer. This method:
+        1. Recomputes u_base deterministically from observations
+        2. Extracts u_gnn = action - u_base
+        3. Evaluates log_prob(u_gnn) under the current policy
+
+        This is correct because only u_gnn is stochastic (learned from the policy),
+        while u_base is deterministic.
+
         obs: (torch.Tensor)
             Observation inputs into network.
         node_obs (torch.Tensor):
@@ -204,7 +235,7 @@ class GR_Actor(nn.Module):
         agent_id (np.ndarray / torch.Tensor)
             The agent id to which the observation belongs to
         action: (torch.Tensor)
-            Actions whose entropy and log probability to evaluate.
+            Total actions (u_base + u_gnn) stored in buffer.
         rnn_states: (torch.Tensor)
             If RNN network, hidden states for RNN.
         masks: (torch.Tensor)
@@ -217,7 +248,7 @@ class GR_Actor(nn.Module):
             Denotes whether an agent is active or dead.
 
         :return action_log_probs: (torch.Tensor)
-            Log probabilities of the input actions.
+            Log probabilities of u_gnn under current policy.
         :return dist_entropy: (torch.Tensor)
             Action distribution entropy for the given inputs.
         """
@@ -233,6 +264,17 @@ class GR_Actor(nn.Module):
 
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
+
+        # Recompute base controller from observations
+        # The 'action' parameter contains total actions (u_base + u_gnn)
+        # We need to extract u_gnn to evaluate its log probability
+        current_pos = obs[:, 2:4]  # [pos_x, pos_y]
+        goal_pos = obs[:, 4:6]     # [goal_x, goal_y]
+        error = goal_pos - current_pos
+        u_base = self.K_p * error
+
+        # Extract the learned component: u_gnn = action - u_base
+        u_gnn = action - u_base
 
         # if batch size is big, split into smaller batches, forward pass and then concatenate
         if (self.split_batch) and (obs.shape[0] > self.max_batch_size):
@@ -258,9 +300,10 @@ class GR_Actor(nn.Module):
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
+        # Evaluate log probs of the learned component (u_gnn), not total action
         action_log_probs, dist_entropy = self.act.evaluate_actions(
             actor_features,
-            action,
+            u_gnn,
             available_actions,
             active_masks=active_masks if self._use_policy_active_masks else None,
         )
@@ -268,7 +311,7 @@ class GR_Actor(nn.Module):
         return (action_log_probs, dist_entropy)
 
 
-class GR_Critic(nn.Module):
+class GR_Base_Critic(nn.Module):
     """
     Critic network class for MAPPO. Outputs value function predictions
     given centralized input (MAPPO) or local observations (IPPO).
@@ -299,7 +342,7 @@ class GR_Critic(nn.Module):
         split_batch: bool = False,
         max_batch_size: int = 32,
     ) -> None:
-        super(GR_Critic, self).__init__()
+        super(GR_Base_Critic, self).__init__()
         self.args = args
         self.hidden_size = args.hidden_size
         self._use_orthogonal = args.use_orthogonal

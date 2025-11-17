@@ -22,6 +22,8 @@ from onpolicy.envs.env_wrappers import (
     GraphDummyVecEnv,
 )
 
+from loguru import logger
+
 """Train script for MPEs."""
 
 
@@ -141,7 +143,9 @@ def parse_args(args, parser):
 
 
 def main(args):
+
     parser = get_config()
+
     all_args, parser = parse_args(args, parser)
 
     if all_args.env_name == "GraphMPE":

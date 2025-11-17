@@ -142,6 +142,24 @@ class GraphReplayBuffer(object):
         )
         self.rnn_states_critic = np.zeros_like(self.rnn_states)
 
+        # LRU hidden states for MAD policy (if used)
+        # LRU hidden states are complex-valued: [real, imaginary]
+        self.use_mad_policy = getattr(args, 'use_mad_policy', False)
+        if self.use_mad_policy:
+            self.lru_hidden_dim = getattr(args, 'lru_hidden_dim', 64)
+            self.lru_hidden_states = np.zeros(
+                (
+                    self.episode_length + 1,
+                    self.n_rollout_threads,
+                    num_agents,
+                    self.lru_hidden_dim,
+                    2,  # real and imaginary parts
+                ),
+                dtype=np.float32,
+            )
+        else:
+            self.lru_hidden_states = None
+
         self.value_preds = np.zeros(
             (self.episode_length + 1, self.n_rollout_threads, num_agents, 1),
             dtype=np.float32,
@@ -203,6 +221,7 @@ class GraphReplayBuffer(object):
         bad_masks: arr = None,
         active_masks: arr = None,
         available_actions: arr = None,
+        lru_hidden_states: arr = None,
     ) -> None:
         """
         Insert data into the buffer.
@@ -261,6 +280,8 @@ class GraphReplayBuffer(object):
             self.active_masks[self.step + 1] = active_masks.copy()
         if available_actions is not None:
             self.available_actions[self.step + 1] = available_actions.copy()
+        if lru_hidden_states is not None and self.lru_hidden_states is not None:
+            self.lru_hidden_states[self.step + 1] = lru_hidden_states.copy()
 
         self.step = (self.step + 1) % self.episode_length
 
@@ -272,6 +293,8 @@ class GraphReplayBuffer(object):
         self.adj[0] = self.adj[-1].copy()
         self.agent_id[0] = self.agent_id[-1].copy()
         self.share_agent_id[0] = self.share_agent_id[-1].copy()
+        if self.lru_hidden_states is not None:
+            self.lru_hidden_states[0] = self.lru_hidden_states[-1].copy()
         self.rnn_states[0] = self.rnn_states[-1].copy()
         self.rnn_states_critic[0] = self.rnn_states_critic[-1].copy()
         self.masks[0] = self.masks[-1].copy()
@@ -411,6 +434,7 @@ class GraphReplayBuffer(object):
             arr,
             arr,
             arr,
+            arr,  # lru_hidden_states
         ],
         None,
         None,
@@ -455,6 +479,12 @@ class GraphReplayBuffer(object):
         rnn_states_critic = self.rnn_states_critic[:-1].reshape(
             -1, *self.rnn_states_critic.shape[3:]
         )
+        if self.lru_hidden_states is not None:
+            lru_hidden_states = self.lru_hidden_states[:-1].reshape(
+                -1, *self.lru_hidden_states.shape[3:]
+            )
+        else:
+            lru_hidden_states = None
         actions = self.actions.reshape(-1, self.actions.shape[-1])
         if self.available_actions is not None:
             available_actions = self.available_actions[:-1].reshape(
@@ -479,6 +509,7 @@ class GraphReplayBuffer(object):
             share_agent_id_batch = share_agent_id[indices]
             rnn_states_batch = rnn_states[indices]
             rnn_states_critic_batch = rnn_states_critic[indices]
+            lru_hidden_states_batch = lru_hidden_states[indices] if lru_hidden_states is not None else None
             actions_batch = actions[indices]
             if self.available_actions is not None:
                 available_actions_batch = available_actions[indices]
@@ -494,7 +525,7 @@ class GraphReplayBuffer(object):
             else:
                 adv_targ = advantages[indices]
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch
 
     def naive_recurrent_generator(
         self, advantages: arr, num_mini_batch: int
@@ -516,6 +547,7 @@ class GraphReplayBuffer(object):
             arr,
             arr,
             arr,
+            arr,  # lru_hidden_states
         ],
         None,
         None,
@@ -551,6 +583,12 @@ class GraphReplayBuffer(object):
         rnn_states_critic = self.rnn_states_critic.reshape(
             -1, batch_size, *self.rnn_states_critic.shape[3:]
         )
+        if self.lru_hidden_states is not None:
+            lru_hidden_states = self.lru_hidden_states.reshape(
+                -1, batch_size, *self.lru_hidden_states.shape[3:]
+            )
+        else:
+            lru_hidden_states = None
         actions = self.actions.reshape(-1, batch_size, self.actions.shape[-1])
         if self.available_actions is not None:
             available_actions = self.available_actions.reshape(
@@ -574,6 +612,7 @@ class GraphReplayBuffer(object):
             share_agent_id_batch = []
             rnn_states_batch = []
             rnn_states_critic_batch = []
+            lru_hidden_states_batch = []
             actions_batch = []
             available_actions_batch = []
             value_preds_batch = []
@@ -593,6 +632,8 @@ class GraphReplayBuffer(object):
                 share_agent_id_batch.append(share_agent_id[:-1, ind])
                 rnn_states_batch.append(rnn_states[0:1, ind])
                 rnn_states_critic_batch.append(rnn_states_critic[0:1, ind])
+                if lru_hidden_states is not None:
+                    lru_hidden_states_batch.append(lru_hidden_states[:-1, ind])
                 actions_batch.append(actions[:, ind])
                 if self.available_actions is not None:
                     available_actions_batch.append(available_actions[:-1, ind])
@@ -630,6 +671,12 @@ class GraphReplayBuffer(object):
                 N, *self.rnn_states_critic.shape[3:]
             )
 
+            # LRU hidden states need to be stacked and flattened like observations
+            if lru_hidden_states is not None:
+                lru_hidden_states_batch = np.stack(lru_hidden_states_batch, 1)
+            else:
+                lru_hidden_states_batch = None
+
             # Flatten the (T, N, ...) from_numpys to (T * N, ...)
             share_obs_batch = _flatten(T, N, share_obs_batch)
             obs_batch = _flatten(T, N, obs_batch)
@@ -638,6 +685,8 @@ class GraphReplayBuffer(object):
             agent_id_batch = _flatten(T, N, agent_id_batch)
             share_agent_id_batch = _flatten(T, N, share_agent_id_batch)
             actions_batch = _flatten(T, N, actions_batch)
+            if lru_hidden_states_batch is not None:
+                lru_hidden_states_batch = _flatten(T, N, lru_hidden_states_batch)
             if self.available_actions is not None:
                 available_actions_batch = _flatten(T, N, available_actions_batch)
             else:
@@ -649,7 +698,7 @@ class GraphReplayBuffer(object):
             old_action_log_probs_batch = _flatten(T, N, old_action_log_probs_batch)
             adv_targ = _flatten(T, N, adv_targ)
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch
 
     def recurrent_generator(
         self, advantages: arr, num_mini_batch: int, data_chunk_length: int
@@ -671,6 +720,7 @@ class GraphReplayBuffer(object):
             arr,
             arr,
             arr,
+            arr,  # lru_hidden_states
         ],
         None,
         None,
@@ -740,6 +790,15 @@ class GraphReplayBuffer(object):
             .reshape(-1, *self.rnn_states_critic.shape[3:])
         )
 
+        if self.lru_hidden_states is not None:
+            lru_hidden_states = (
+                self.lru_hidden_states[:-1]
+                .transpose(1, 2, 0, 3, 4)
+                .reshape(-1, *self.lru_hidden_states.shape[3:])
+            )
+        else:
+            lru_hidden_states = None
+
         if self.available_actions is not None:
             available_actions = _cast(self.available_actions[:-1])
 
@@ -752,6 +811,7 @@ class GraphReplayBuffer(object):
             share_agent_id_batch = []
             rnn_states_batch = []
             rnn_states_critic_batch = []
+            lru_hidden_states_batch = []
             actions_batch = []
             available_actions_batch = []
             value_preds_batch = []
@@ -788,6 +848,8 @@ class GraphReplayBuffer(object):
                 # size [T+1 N M Dim]-->[T N M Dim]-->[N M T Dim]-->[N*M*T,Dim]-->[1,Dim]
                 rnn_states_batch.append(rnn_states[ind])
                 rnn_states_critic_batch.append(rnn_states_critic[ind])
+                if lru_hidden_states is not None:
+                    lru_hidden_states_batch.append(lru_hidden_states[ind : ind + data_chunk_length])
 
             L, N = data_chunk_length, mini_batch_size
 
@@ -817,6 +879,12 @@ class GraphReplayBuffer(object):
                 N, *self.rnn_states_critic.shape[3:]
             )
 
+            # LRU hidden states are stacked like observations (sequences)
+            if lru_hidden_states is not None:
+                lru_hidden_states_batch = np.stack(lru_hidden_states_batch, axis=1)
+            else:
+                lru_hidden_states_batch = None
+
             # Flatten the (L, N, ...) from_numpys to (L * N, ...)
             share_obs_batch = _flatten(L, N, share_obs_batch)
             obs_batch = _flatten(L, N, obs_batch)
@@ -825,6 +893,8 @@ class GraphReplayBuffer(object):
             agent_id_batch = _flatten(L, N, agent_id_batch)
             share_agent_id_batch = _flatten(L, N, share_agent_id_batch)
             actions_batch = _flatten(L, N, actions_batch)
+            if lru_hidden_states_batch is not None:
+                lru_hidden_states_batch = _flatten(L, N, lru_hidden_states_batch)
             if self.available_actions is not None:
                 available_actions_batch = _flatten(L, N, available_actions_batch)
             else:
@@ -836,7 +906,7 @@ class GraphReplayBuffer(object):
             old_action_log_probs_batch = _flatten(L, N, old_action_log_probs_batch)
             adv_targ = _flatten(L, N, adv_targ)
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch
 
 
 def create_generator():

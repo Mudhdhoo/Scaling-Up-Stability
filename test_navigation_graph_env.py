@@ -11,7 +11,7 @@ import numpy as np
 # makeshift argparser
 class Args:
     def __init__(self):
-        self.num_agents:int=10
+        self.num_agents:int=3
         self.world_size=5
         self.num_scripted_agents=0
         self.num_obstacles:int=10
@@ -23,7 +23,7 @@ class Args:
         self.use_dones:bool=False
         self.episode_length:int=25
         self.max_edge_dist:float=1
-        self.graph_feat_type:str='global'
+        self.graph_feat_type:str='relative'
 
 def random_discrete_policy(obs):
     policy = np.zeros(5)
@@ -38,7 +38,8 @@ def random_continuous_policy(obs):
 
 def p_control_policy(obs, goal_pos):
     kp = 0.1
-    pos = obs[2:4]
+    # pos = obs[2:4]
+    pos = obs[0:2]
     error = goal_pos - pos
     u = kp * error 
     u = np.clip(u, -1, 1)
@@ -86,6 +87,6 @@ while True:
         act_n.append(action)
     # step environment
     obs_n, agent_id_n, node_obs_n, adj_n, reward_n, done_n, info_n = env.step(act_n)
-
+    print(obs_n[0].shape, node_obs_n[0].shape, adj_n[0].shape, len(agent_id_n), len(reward_n), len(done_n), len(info_n))
     # render all agent views
     env.render()

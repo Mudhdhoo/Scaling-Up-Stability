@@ -15,7 +15,7 @@
 import argparse
 from typing import Dict
 import numpy as np
-
+from loguru import logger
 from multiagent.custom_scenarios import load
 
 
@@ -70,6 +70,18 @@ def GraphMPEEnv(args):
     world = scenario.make_world(args=args)
     from multiagent.environment import MultiAgentGraphEnv
 
+    # Determine if we should use discrete or continuous actions
+    # MAD policy requires continuous actions
+    if hasattr(args, 'discrete_action') and args.discrete_action is not None:
+        # User explicitly specified discrete_action
+        discrete_action = args.discrete_action
+    elif hasattr(args, 'use_mad_policy') and args.use_mad_policy:
+        # MAD policy requires continuous actions
+        discrete_action = False
+    else:
+        # Default to discrete actions
+        discrete_action = True
+
     # create multiagent environment
     env = MultiAgentGraphEnv(
         world=world,
@@ -81,6 +93,7 @@ def GraphMPEEnv(args):
         id_callback=scenario.get_id,
         info_callback=scenario.info_callback,
         scenario_name=args.scenario_name,
+        discrete_action=discrete_action,
     )
 
     return env

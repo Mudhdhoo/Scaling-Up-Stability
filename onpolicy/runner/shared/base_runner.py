@@ -8,7 +8,7 @@ import torch
 from tensorboardX import SummaryWriter  # tensorboardX to work with macos
 from onpolicy.utils.shared_buffer import SharedReplayBuffer
 from onpolicy.utils.graph_buffer import GraphReplayBuffer
-
+from loguru import logger
 
 def _t2n(x):
     """Convert torch tensor to a numpy array."""
@@ -75,9 +75,19 @@ class Runner(object):
                 if not os.path.exists(self.save_dir):
                     os.makedirs(self.save_dir)
 
+        # Select policy based on environment and policy type
+        use_mad_policy = getattr(self.all_args, 'use_mad_policy', False)
+
         if self.all_args.env_name == "GraphMPE":
-            from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
-            from onpolicy.algorithms.graph_MAPPOPolicy import GR_MAPPOPolicy as Policy
+            if use_mad_policy:
+                from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
+                from onpolicy.algorithms.mad_MAPPOPolicy import MAD_MAPPOPolicy as Policy
+            elif self.all_args.use_gnn_plus_base:
+                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
+                 from onpolicy.algorithms.graph_base_policy import GR_BASE_MAPPO_Policy as Policy
+            else:
+                from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
+                from onpolicy.algorithms.graph_MAPPOPolicy import GR_MAPPOPolicy as Policy
         else:
             from onpolicy.algorithms.mappo import R_MAPPO as TrainAlgo
             from onpolicy.algorithms.MAPPOPolicy import R_MAPPOPolicy as Policy
@@ -87,7 +97,11 @@ class Runner(object):
             share_observation_space = self.envs.share_observation_space[0]
         else:
             share_observation_space = self.envs.observation_space[0]
-
+        logger.info(self.envs.observation_space[0])
+        logger.info(share_observation_space)
+        logger.info(self.envs.node_observation_space[0])
+        logger.info(self.envs.edge_observation_space[0])
+        logger.info(self.envs.action_space[0])
         # policy network
         if self.all_args.env_name == "GraphMPE":
             self.policy = Policy(

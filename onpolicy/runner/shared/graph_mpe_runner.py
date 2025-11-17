@@ -46,6 +46,7 @@ class GMPERunner(Runner):
                     action_log_probs,
                     rnn_states,
                     rnn_states_critic,
+                    lru_hidden_states,
                     actions_env,
                 ) = self.collect(step)
 
@@ -53,6 +54,8 @@ class GMPERunner(Runner):
                 obs, agent_id, node_obs, adj, rewards, dones, infos = self.envs.step(
                     actions_env
                 )
+
+                #logger.info(f"Obs shape: {obs.shape}, Agent ID shape: {agent_id.shape}, Node Obs shape: {node_obs.shape}, Adj shape: {adj.shape}, RNN States shape {rnn_states.shape}")
 
                 data = (
                     obs,
@@ -68,17 +71,15 @@ class GMPERunner(Runner):
                     action_log_probs,
                     rnn_states,
                     rnn_states_critic,
+                    lru_hidden_states,
                 )
 
                 # insert data into buffer
                 self.insert(data)
 
             # compute return and update network
-            start_time = time.time()
             self.compute()
             train_infos = self.train()
-            end_time = time.time()
-            print(f"Compute return and update network time: {end_time - start_time}")
 
             # post process
             total_num_steps = (
@@ -138,15 +139,9 @@ class GMPERunner(Runner):
         self.buffer.share_agent_id[0] = share_agent_id.copy()
 
     @torch.no_grad()
-    def collect(self, step: int) -> Tuple[arr, arr, arr, arr, arr, arr]:
+    def collect(self, step: int) -> Tuple[arr, arr, arr, arr, arr, arr, arr]:
         self.trainer.prep_rollout()
-        (
-            value,
-            action,
-            action_log_prob,
-            rnn_states,
-            rnn_states_critic,
-        ) = self.trainer.policy.get_actions(
+        policy_output = self.trainer.policy.get_actions(
             np.concatenate(self.buffer.share_obs[step]),
             np.concatenate(self.buffer.obs[step]),
             np.concatenate(self.buffer.node_obs[step]),
@@ -157,6 +152,16 @@ class GMPERunner(Runner):
             np.concatenate(self.buffer.rnn_states_critic[step]),
             np.concatenate(self.buffer.masks[step]),
         )
+
+        # Handle both standard policy (5 outputs) and MAD policy (6 outputs)
+        if len(policy_output) == 6:
+            # MAD policy returns LRU hidden states
+            value, action, action_log_prob, rnn_states, rnn_states_critic, lru_hidden = policy_output
+        else:
+            # Standard policy
+            value, action, action_log_prob, rnn_states, rnn_states_critic = policy_output
+            lru_hidden = None
+
         # [self.envs, agents, dim]
         values = np.array(np.split(_t2n(value), self.n_rollout_threads))
         actions = np.array(np.split(_t2n(action), self.n_rollout_threads))
@@ -167,6 +172,10 @@ class GMPERunner(Runner):
         rnn_states_critic = np.array(
             np.split(_t2n(rnn_states_critic), self.n_rollout_threads)
         )
+        if lru_hidden is not None:
+            lru_hidden_states = np.array(np.split(_t2n(lru_hidden), self.n_rollout_threads))
+        else:
+            lru_hidden_states = None
         # rearrange action
         if self.envs.action_space[0].__class__.__name__ == "MultiDiscrete":
             for i in range(self.envs.action_space[0].shape):
@@ -179,8 +188,13 @@ class GMPERunner(Runner):
                     actions_env = np.concatenate((actions_env, uc_actions_env), axis=2)
         elif self.envs.action_space[0].__class__.__name__ == "Discrete":
             actions_env = np.squeeze(np.eye(self.envs.action_space[0].n)[actions], 2)
+        elif self.envs.action_space[0].__class__.__name__ == "Box":
+            # Continuous action space - use actions directly
+            actions_env = actions
         else:
-            raise NotImplementedError
+            raise NotImplementedError(
+                f"Action space {self.envs.action_space[0].__class__.__name__} not supported"
+            )
 
         return (
             values,
@@ -188,6 +202,7 @@ class GMPERunner(Runner):
             action_log_probs,
             rnn_states,
             rnn_states_critic,
+            lru_hidden_states,
             actions_env,
         )
 
@@ -206,6 +221,7 @@ class GMPERunner(Runner):
             action_log_probs,
             rnn_states,
             rnn_states_critic,
+            lru_hidden_states,
         ) = data
 
         rnn_states[dones == True] = np.zeros(
@@ -250,6 +266,7 @@ class GMPERunner(Runner):
             values,
             rewards,
             masks,
+            lru_hidden_states=lru_hidden_states,
         )
 
     @torch.no_grad()
@@ -313,8 +330,13 @@ class GMPERunner(Runner):
                 eval_actions_env = np.squeeze(
                     np.eye(self.eval_envs.action_space[0].n)[eval_actions], 2
                 )
+            elif self.eval_envs.action_space[0].__class__.__name__ == "Box":
+                # Continuous action space - use actions directly
+                eval_actions_env = eval_actions
             else:
-                raise NotImplementedError
+                raise NotImplementedError(
+                    f"Action space {self.eval_envs.action_space[0].__class__.__name__} not supported"
+                )
 
             # Obser reward and next obs
             (
@@ -425,8 +447,13 @@ class GMPERunner(Runner):
                             )
                 elif envs.action_space[0].__class__.__name__ == "Discrete":
                     actions_env = np.squeeze(np.eye(envs.action_space[0].n)[actions], 2)
+                elif envs.action_space[0].__class__.__name__ == "Box":
+                    # Continuous action space - use actions directly
+                    actions_env = actions
                 else:
-                    raise NotImplementedError
+                    raise NotImplementedError(
+                        f"Action space {envs.action_space[0].__class__.__name__} not supported"
+                    )
 
                 # Obser reward and next obs
                 obs, agent_id, node_obs, adj, rewards, dones, infos = envs.step(

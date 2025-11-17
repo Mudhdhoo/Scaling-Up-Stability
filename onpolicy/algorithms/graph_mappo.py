@@ -136,11 +136,22 @@ class GR_MAPPO():
             :return imp_weights: (torch.Tensor) 
                 importance sampling weights.
         """
-        share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
-        share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
-        actions_batch, value_preds_batch, return_batch, masks_batch, \
-        active_masks_batch,old_action_log_probs_batch, adv_targ, \
-        available_actions_batch = sample
+        # Handle both standard and MAD policy (MAD has extra lru_hidden_states)
+        if len(sample) == 17:
+            # MAD policy with LRU hidden states
+            share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
+            share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
+            actions_batch, value_preds_batch, return_batch, masks_batch, \
+            active_masks_batch,old_action_log_probs_batch, adv_targ, \
+            available_actions_batch, lru_hidden_states_batch = sample
+        else:
+            # Standard policy
+            share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
+            share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
+            actions_batch, value_preds_batch, return_batch, masks_batch, \
+            active_masks_batch,old_action_log_probs_batch, adv_targ, \
+            available_actions_batch = sample
+            lru_hidden_states_batch = None
 
         old_action_log_probs_batch = check(old_action_log_probs_batch).to(**self.tpdv)
         adv_targ = check(adv_targ).to(**self.tpdv)
@@ -149,6 +160,20 @@ class GR_MAPPO():
         active_masks_batch = check(active_masks_batch).to(**self.tpdv)
         # print("MaPPO", active_masks_batch.T)
         # Reshape to do in a single forward pass for all steps
+        # values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
+        #                                                 share_obs_batch,
+        #                                                 obs_batch,
+        #                                                 node_obs_batch,
+        #                                                 adj_batch,
+        #                                                 agent_id_batch,
+        #                                                 share_agent_id_batch,
+        #                                                 rnn_states_batch,
+        #                                                 rnn_states_critic_batch,
+        #                                                 actions_batch,
+        #                                                 masks_batch,
+        #                                                 available_actions_batch,
+        #                                                 active_masks_batch,
+        #                                                 lru_hidden_states_batch)
         values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
                                                         share_obs_batch,
                                                         obs_batch,
@@ -156,12 +181,13 @@ class GR_MAPPO():
                                                         adj_batch,
                                                         agent_id_batch,
                                                         share_agent_id_batch,
-                                                        rnn_states_batch, 
-                                                        rnn_states_critic_batch, 
-                                                        actions_batch, 
-                                                        masks_batch, 
+                                                        rnn_states_batch,
+                                                        rnn_states_critic_batch,
+                                                        actions_batch,
+                                                        masks_batch,
                                                         available_actions_batch,
-                                                        active_masks_batch)
+                                                        active_masks_batch
+                                                        )
         # actor update
         # print(f'obs: {obs_batch.shape}')
         # st = time.time()
