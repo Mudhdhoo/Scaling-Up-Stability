@@ -73,5 +73,6 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --graph_feat_type "relative" \
 --auto_mini_batch_size --target_mini_batch_size 128 \
 --use_wandb "False" \
+--use_gnn_plus_base \
 --discrete_action "False" \
 --kp_val 0.5

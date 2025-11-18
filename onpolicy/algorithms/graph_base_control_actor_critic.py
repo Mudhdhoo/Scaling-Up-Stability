@@ -12,7 +12,7 @@ from onpolicy.algorithms.utils.rnn import RNNLayer
 from onpolicy.algorithms.utils.act import ACTLayer
 from onpolicy.algorithms.utils.popart import PopArt
 from onpolicy.utils.util import get_shape_from_obs_space
-
+from loguru import logger
 
 def minibatchGenerator(
     obs: Tensor, node_obs: Tensor, adj: Tensor, agent_id: Tensor, max_batch_size: int
@@ -177,7 +177,7 @@ class GR_Base_Actor(nn.Module):
         else:
             nbd_features = self.gnn_base(node_obs, adj, agent_id)         # Generate node embedding for the agent
             actor_features = torch.cat([obs, nbd_features], dim=1)        # Concatenate agent observation with node embedding
-            actor_features = self.base(actor_features)                    # Pass through actor MLP
+            actor_features = self.base(actor_features)                    # Pass through actor MLP (batch size, hidden size)
 
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
