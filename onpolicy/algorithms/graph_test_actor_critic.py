@@ -13,6 +13,8 @@ from onpolicy.algorithms.utils.act import ACTLayer
 from onpolicy.algorithms.utils.popart import PopArt
 from onpolicy.utils.util import get_shape_from_obs_space
 from loguru import logger
+from onpolicy.algorithms.utils.ssm import SSM
+import time
 
 def minibatchGenerator(
     obs: Tensor, node_obs: Tensor, adj: Tensor, agent_id: Tensor, max_batch_size: int
@@ -30,10 +32,10 @@ def minibatchGenerator(
         )
 
 
-class GR_Base_Actor(nn.Module):
+class GR_Test_Actor(nn.Module):
     """
-    Actor network with proportional base controller for MAPPO.
-    Outputs actions as: u = u_base + u_gnn
+    Actor network with SSM and proportional base controller for MAPPO.
+    Outputs actions as: u = u_base + |M(x0)| * u_gnn
     where u_base = K_p * (goal - pos) is a proportional controller
     and u_gnn is learned from GNN features.
 
@@ -70,7 +72,7 @@ class GR_Base_Actor(nn.Module):
         split_batch: bool = False,
         max_batch_size: int = 32,
     ) -> None:
-        super(GR_Base_Actor, self).__init__()
+        super(GR_Test_Actor, self).__init__()
         self.args = args
         self.hidden_size = args.hidden_size
 
@@ -107,6 +109,16 @@ class GR_Base_Actor(nn.Module):
         self.act = ACTLayer(
             action_space, self.hidden_size, self._use_orthogonal, self._gain
         )
+
+        self.magnitude_mlp = nn.Sequential(
+            nn.Linear(obs_shape[0], self.hidden_size, bias=False),
+            nn.SiLU(),
+            nn.Linear(self.hidden_size, 1, bias=False),
+        )
+        for layer in self.magnitude_mlp:
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_uniform_(layer.weight)
+
 
         self.to(device)
 
@@ -158,6 +170,8 @@ class GR_Base_Actor(nn.Module):
         if available_actions is not None:
             available_actions = check(available_actions).to(**self.tpdv)
 
+        batch_size = obs.shape[0]
+
         # if batch size is big, split into smaller batches, forward pass and then concatenate
         if (self.split_batch) and (obs.shape[0] > self.max_batch_size):
             # print(f'Actor obs: {obs.shape[0]}')
@@ -182,23 +196,33 @@ class GR_Base_Actor(nn.Module):
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
-        # GNN outputs a learned adjustment (continuous action space required)
-        # For continuous action space (Box), self.act outputs 2D continuous actions
-        u_gnn, action_log_probs = self.act(
+        # Sample gaussian
+        y, y_log_probs = self.act(
             actor_features, available_actions, deterministic
         )
 
-        u_gnn = torch.tanh(u_gnn)  # Tanh for |D(x)| ≤ 1
+        # Direction term
+        u_gnn = torch.tanh(y)  # Tanh for |D(x)| ≤ 1
 
-        # Observation structure: [vel_x, vel_y, pos_x, pos_y, goal_x, goal_y, ...]
+        # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
         rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
-        u_base = self.K_p * rel_goal  # Broadcasting K_p
+        u_base = self.K_p * rel_goal
 
-        # Total action: base controller + learned GNN adjustment
-        actions = u_base + u_gnn
-        actions = actions 
-    
-        return (actions, action_log_probs, rnn_states)
+        # Magnitude term
+        magnitude = torch.abs(self.magnitude_mlp(obs))
+        #logger.info(f'magnitude: {magnitude}')
+
+        actions = u_base + magnitude * u_gnn
+
+        action_dim = u_gnn.shape[-1]
+        log_jac_tanh = torch.log(1 - u_gnn.pow(2) + 1e-8).sum(-1, keepdim=True)  # sum over action dims, keep shape [batch, 1]
+        log_jac_M    = torch.log(magnitude.abs() + 1e-8).sum(-1, keepdim=True) * action_dim  # keep shape [batch, 1]
+
+        action_log_probs = y_log_probs - log_jac_M - log_jac_tanh
+
+        # Return y (pre-tanh sample) for correct policy gradient computation during evaluation
+        return (actions, action_log_probs, rnn_states, y)
+
 
     def evaluate_actions(
         self,
@@ -211,18 +235,14 @@ class GR_Base_Actor(nn.Module):
         masks,
         available_actions=None,
         active_masks=None,
+        pre_tanh_value=None,
     ) -> Tuple[Tensor, Tensor]:
         """
         Compute log probability and entropy of given actions.
 
-        IMPORTANT: The 'action' parameter contains TOTAL actions (u_base + u_gnn)
-        stored in the buffer. This method:
-        1. Recomputes u_base deterministically from observations
-        2. Extracts u_gnn = action - u_base
-        3. Evaluates log_prob(u_gnn) under the current policy
-
-        This is correct because only u_gnn is stochastic (learned from the policy),
-        while u_base is deterministic.
+        This method uses the stored pre_tanh_value (y) directly instead of
+        trying to recover it from the action. This ensures correct gradient
+        flow to the magnitude network through the Jacobian term.
 
         obs: (torch.Tensor)
             Observation inputs into network.
@@ -233,7 +253,7 @@ class GR_Base_Actor(nn.Module):
         agent_id (np.ndarray / torch.Tensor)
             The agent id to which the observation belongs to
         action: (torch.Tensor)
-            Total actions (u_base + u_gnn) stored in buffer.
+            Total actions (u_base + u_gnn) stored in buffer (not used when pre_tanh_value provided).
         rnn_states: (torch.Tensor)
             If RNN network, hidden states for RNN.
         masks: (torch.Tensor)
@@ -244,9 +264,12 @@ class GR_Base_Actor(nn.Module):
             (if None, all actions available)
         active_masks: (torch.Tensor)
             Denotes whether an agent is active or dead.
+        pre_tanh_value: (torch.Tensor)
+            The raw Gaussian sample y stored during rollout collection.
+            This is the correct sample to evaluate under the current policy.
 
         :return action_log_probs: (torch.Tensor)
-            Log probabilities of u_gnn under current policy.
+            Log probabilities under current policy.
         :return dist_entropy: (torch.Tensor)
             Action distribution entropy for the given inputs.
         """
@@ -263,15 +286,8 @@ class GR_Base_Actor(nn.Module):
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
 
-
-        rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
-        u_base = self.K_p * rel_goal  # Broadcasting K_p
-
-        # Extract the learned component: u_gnn = action - u_base
-        u_gnn_tanh = torch.clamp(action - u_base, -0.999, 0.999)
-
-        u_gnn = 0.5 * torch.log((1 + u_gnn_tanh) / (1 - u_gnn_tanh))
-
+        if pre_tanh_value is not None:
+            pre_tanh_value = check(pre_tanh_value).to(**self.tpdv)
 
         # if batch size is big, split into smaller batches, forward pass and then concatenate
         if (self.split_batch) and (obs.shape[0] > self.max_batch_size):
@@ -297,18 +313,48 @@ class GR_Base_Actor(nn.Module):
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
-        # Evaluate log probs of the learned component (u_gnn), not total action
-        action_log_probs, dist_entropy = self.act.evaluate_actions(
+        # Compute magnitude for Jacobian correction (gradients flow through this)
+        magnitude = torch.abs(self.magnitude_mlp(obs))
+
+        # Use stored pre_tanh_value (y) if provided, otherwise fall back to recovery
+        if pre_tanh_value is not None:
+            # Use the stored y directly - this is the correct approach
+            y = pre_tanh_value
+            u_gnn_tanh = torch.tanh(y)
+        else:
+            # Fallback: recover y from action (less accurate due to M mismatch)
+            rel_goal = obs[:, 4:6]
+            u_base = self.K_p * rel_goal
+            u_gnn_tanh = torch.clamp((action - u_base) / (magnitude + 1e-8), -0.999, 0.999)
+            y = torch.atanh(u_gnn_tanh)
+
+        # Evaluate log probs of the Gaussian sample y under current policy
+        y_log_probs, dist_entropy_y = self.act.evaluate_actions(
             actor_features,
-            u_gnn,
+            y,
             available_actions,
             active_masks=active_masks if self._use_policy_active_masks else None,
         )
 
+        action_dim = u_gnn_tanh.shape[-1]
+
+        # Jacobian correction for the transformation: action = u_base + M * tanh(y)
+        # Gradients to M flow through log_jac_M term
+        log_jac_tanh = torch.log(1 - u_gnn_tanh.pow(2) + 1e-8).sum(-1, keepdim=True)
+        log_jac_M = torch.log(magnitude.abs() + 1e-8).sum(-1, keepdim=True) * action_dim
+
+        action_log_probs = y_log_probs - log_jac_M - log_jac_tanh
+
+        # Correct entropy for the transformed distribution: H(action) = H(y) + E[log|det(J)|]
+        # The Jacobian terms contribute positively to entropy (larger M = more spread = higher entropy)
+        # This balances the -log|M| penalty in log_prob, preventing magnitude collapse
+        log_det_jacobian = log_jac_M + log_jac_tanh
+        dist_entropy = dist_entropy_y + log_det_jacobian.mean()
+
         return (action_log_probs, dist_entropy)
 
 
-class GR_Base_Critic(nn.Module):
+class GR_Test_Critic(nn.Module):
     """
     Critic network class for MAPPO. Outputs value function predictions
     given centralized input (MAPPO) or local observations (IPPO).
@@ -339,7 +385,7 @@ class GR_Base_Critic(nn.Module):
         split_batch: bool = False,
         max_batch_size: int = 32,
     ) -> None:
-        super(GR_Base_Critic, self).__init__()
+        super(GR_Test_Critic, self).__init__()
         self.args = args
         self.hidden_size = args.hidden_size
         self._use_orthogonal = args.use_orthogonal

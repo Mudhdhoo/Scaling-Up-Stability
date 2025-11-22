@@ -142,11 +142,14 @@ class GraphReplayBuffer(object):
         )
         self.rnn_states_critic = np.zeros_like(self.rnn_states)
 
-        # LRU hidden states for MAD policy (if used)
+        # LRU/SSM hidden states for MAD or SSM policy (if used)
         # LRU hidden states are complex-valued: [real, imaginary]
         self.use_mad_policy = getattr(args, 'use_mad_policy', False)
-        if self.use_mad_policy:
-            self.lru_hidden_dim = getattr(args, 'lru_hidden_dim', 64)
+        self.use_ssm_plus_base = getattr(args, 'use_ssm_plus_base', False)
+        if self.use_mad_policy or self.use_ssm_plus_base:
+            # Use lru_hidden_dim for MAD, ssm_hidden_dim for SSM, default 64
+            self.lru_hidden_dim = getattr(args, 'lru_hidden_dim',
+                                         getattr(args, 'ssm_hidden_dim', 64))
             self.lru_hidden_states = np.zeros(
                 (
                     self.episode_length + 1,
@@ -185,8 +188,15 @@ class GraphReplayBuffer(object):
             (self.episode_length, self.n_rollout_threads, num_agents, act_shape),
             dtype=np.float32,
         )
-        self.action_log_probs = np.zeros(
+        # Pre-tanh values (raw Gaussian samples y) for correct policy gradient computation
+        # Shape matches actions since y has same dimension as action
+        self.pre_tanh_value = np.zeros(
             (self.episode_length, self.n_rollout_threads, num_agents, act_shape),
+            dtype=np.float32,
+        )
+        # Log probs are always summed to scalar (1 dimension), regardless of action space
+        self.action_log_probs = np.zeros(
+            (self.episode_length, self.n_rollout_threads, num_agents, 1),
             dtype=np.float32,
         )
         self.rewards = np.zeros(
@@ -222,6 +232,7 @@ class GraphReplayBuffer(object):
         active_masks: arr = None,
         available_actions: arr = None,
         lru_hidden_states: arr = None,
+        pre_tanh_value: arr = None,
     ) -> None:
         """
         Insert data into the buffer.
@@ -282,6 +293,8 @@ class GraphReplayBuffer(object):
             self.available_actions[self.step + 1] = available_actions.copy()
         if lru_hidden_states is not None and self.lru_hidden_states is not None:
             self.lru_hidden_states[self.step + 1] = lru_hidden_states.copy()
+        if pre_tanh_value is not None:
+            self.pre_tanh_value[self.step] = pre_tanh_value.copy()
 
         self.step = (self.step + 1) % self.episode_length
 
@@ -486,6 +499,7 @@ class GraphReplayBuffer(object):
         else:
             lru_hidden_states = None
         actions = self.actions.reshape(-1, self.actions.shape[-1])
+        pre_tanh_value = self.pre_tanh_value.reshape(-1, self.pre_tanh_value.shape[-1])
         if self.available_actions is not None:
             available_actions = self.available_actions[:-1].reshape(
                 -1, self.available_actions.shape[-1]
@@ -511,6 +525,7 @@ class GraphReplayBuffer(object):
             rnn_states_critic_batch = rnn_states_critic[indices]
             lru_hidden_states_batch = lru_hidden_states[indices] if lru_hidden_states is not None else None
             actions_batch = actions[indices]
+            pre_tanh_value_batch = pre_tanh_value[indices]
             if self.available_actions is not None:
                 available_actions_batch = available_actions[indices]
             else:
@@ -525,7 +540,7 @@ class GraphReplayBuffer(object):
             else:
                 adv_targ = advantages[indices]
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch
 
     def naive_recurrent_generator(
         self, advantages: arr, num_mini_batch: int
@@ -590,6 +605,7 @@ class GraphReplayBuffer(object):
         else:
             lru_hidden_states = None
         actions = self.actions.reshape(-1, batch_size, self.actions.shape[-1])
+        pre_tanh_value = self.pre_tanh_value.reshape(-1, batch_size, self.pre_tanh_value.shape[-1])
         if self.available_actions is not None:
             available_actions = self.available_actions.reshape(
                 -1, batch_size, self.available_actions.shape[-1]
@@ -614,6 +630,7 @@ class GraphReplayBuffer(object):
             rnn_states_critic_batch = []
             lru_hidden_states_batch = []
             actions_batch = []
+            pre_tanh_value_batch = []
             available_actions_batch = []
             value_preds_batch = []
             return_batch = []
@@ -635,6 +652,7 @@ class GraphReplayBuffer(object):
                 if lru_hidden_states is not None:
                     lru_hidden_states_batch.append(lru_hidden_states[:-1, ind])
                 actions_batch.append(actions[:, ind])
+                pre_tanh_value_batch.append(pre_tanh_value[:, ind])
                 if self.available_actions is not None:
                     available_actions_batch.append(available_actions[:-1, ind])
                 value_preds_batch.append(value_preds[:-1, ind])
@@ -654,6 +672,7 @@ class GraphReplayBuffer(object):
             agent_id_batch = np.stack(agent_id_batch, 1)
             share_agent_id_batch = np.stack(share_agent_id_batch, 1)
             actions_batch = np.stack(actions_batch, 1)
+            pre_tanh_value_batch = np.stack(pre_tanh_value_batch, 1)
             if self.available_actions is not None:
                 available_actions_batch = np.stack(available_actions_batch, 1)
             value_preds_batch = np.stack(value_preds_batch, 1)
@@ -685,6 +704,7 @@ class GraphReplayBuffer(object):
             agent_id_batch = _flatten(T, N, agent_id_batch)
             share_agent_id_batch = _flatten(T, N, share_agent_id_batch)
             actions_batch = _flatten(T, N, actions_batch)
+            pre_tanh_value_batch = _flatten(T, N, pre_tanh_value_batch)
             if lru_hidden_states_batch is not None:
                 lru_hidden_states_batch = _flatten(T, N, lru_hidden_states_batch)
             if self.available_actions is not None:
@@ -698,7 +718,7 @@ class GraphReplayBuffer(object):
             old_action_log_probs_batch = _flatten(T, N, old_action_log_probs_batch)
             adv_targ = _flatten(T, N, adv_targ)
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch
 
     def recurrent_generator(
         self, advantages: arr, num_mini_batch: int, data_chunk_length: int
@@ -771,6 +791,7 @@ class GraphReplayBuffer(object):
         share_agent_id = _cast(self.share_agent_id[:-1])
 
         actions = _cast(self.actions)
+        pre_tanh_value = _cast(self.pre_tanh_value)
         action_log_probs = _cast(self.action_log_probs)
         advantages = _cast(advantages)
         value_preds = _cast(self.value_preds[:-1])
@@ -813,6 +834,7 @@ class GraphReplayBuffer(object):
             rnn_states_critic_batch = []
             lru_hidden_states_batch = []
             actions_batch = []
+            pre_tanh_value_batch = []
             available_actions_batch = []
             value_preds_batch = []
             return_batch = []
@@ -833,6 +855,7 @@ class GraphReplayBuffer(object):
                     share_agent_id[ind : ind + data_chunk_length]
                 )
                 actions_batch.append(actions[ind : ind + data_chunk_length])
+                pre_tanh_value_batch.append(pre_tanh_value[ind : ind + data_chunk_length])
                 if self.available_actions is not None:
                     available_actions_batch.append(
                         available_actions[ind : ind + data_chunk_length]
@@ -862,6 +885,7 @@ class GraphReplayBuffer(object):
             share_agent_id_batch = np.stack(share_agent_id_batch, axis=1)
 
             actions_batch = np.stack(actions_batch, axis=1)
+            pre_tanh_value_batch = np.stack(pre_tanh_value_batch, axis=1)
             if self.available_actions is not None:
                 available_actions_batch = np.stack(available_actions_batch, axis=1)
             value_preds_batch = np.stack(value_preds_batch, axis=1)
@@ -893,6 +917,7 @@ class GraphReplayBuffer(object):
             agent_id_batch = _flatten(L, N, agent_id_batch)
             share_agent_id_batch = _flatten(L, N, share_agent_id_batch)
             actions_batch = _flatten(L, N, actions_batch)
+            pre_tanh_value_batch = _flatten(L, N, pre_tanh_value_batch)
             if lru_hidden_states_batch is not None:
                 lru_hidden_states_batch = _flatten(L, N, lru_hidden_states_batch)
             if self.available_actions is not None:
@@ -906,7 +931,7 @@ class GraphReplayBuffer(object):
             old_action_log_probs_batch = _flatten(L, N, old_action_log_probs_batch)
             adv_targ = _flatten(L, N, adv_targ)
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch
 
 
 def create_generator():

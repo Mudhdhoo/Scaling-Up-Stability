@@ -7,7 +7,8 @@ import torch.nn as nn
 
 def init(module: nn.Module, weight_init, bias_init, gain: float = 1):
     weight_init(module.weight.data, gain=gain)
-    bias_init(module.bias.data)
+    if module.bias is not None:
+        bias_init(module.bias.data)
     return module
 
 

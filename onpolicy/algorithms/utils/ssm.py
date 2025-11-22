@@ -13,6 +13,7 @@ Implements a State-Space Model (SSM) combining various components, including:
 import math
 import torch
 import torch.nn as nn
+from loguru import logger
 
 
 class MLP(nn.Module):
@@ -39,6 +40,12 @@ class MLP(nn.Module):
                 hidden_size, output_size, bias=False
             ),  # Output layer (no activation)
         )
+
+        # Xavier initialization
+        for layer in self.model:
+            if isinstance(layer, nn.Linear):
+                #nn.init.xavier_uniform_(layer.weight, gain=2.5)
+                nn.init.kaiming_uniform_(layer.weight)
 
     def forward(self, x):
         """
@@ -199,9 +206,15 @@ class LRU(nn.Module):
         self.in_features = in_features
         self.scan = scan
         self.out_features = out_features
-        self.D = nn.Parameter(
-            torch.randn([out_features, in_features]) / math.sqrt(in_features)
-        )
+
+        # self.D = nn.Parameter(
+        #     torch.randn([out_features, in_features]) / math.sqrt(in_features)
+        # )
+
+        D = torch.empty([out_features, in_features])
+        torch.nn.init.kaiming_uniform_(D)
+        self.D = nn.Parameter(D)
+
         u1 = torch.rand(state_features)
         u2 = torch.rand(state_features)
         self.nu_log = nn.Parameter(
@@ -215,12 +228,27 @@ class LRU(nn.Module):
                 torch.sqrt(torch.ones_like(Lambda_mod) - torch.square(Lambda_mod))
             )
         )
-        B_re = torch.randn([state_features, in_features]) / math.sqrt(2 * in_features)
-        B_im = torch.randn([state_features, in_features]) / math.sqrt(2 * in_features)
+
+        # B_re = torch.randn([state_features, in_features]) / math.sqrt(2 * in_features)
+        # B_im = torch.randn([state_features, in_features]) / math.sqrt(2 * in_features)
+        # self.B = nn.Parameter(torch.complex(B_re, B_im))
+
+        B_re = torch.empty([state_features, in_features])
+        B_im = torch.empty([state_features, in_features])
+        torch.nn.init.kaiming_uniform_(B_re)
+        torch.nn.init.kaiming_uniform_(B_im)
         self.B = nn.Parameter(torch.complex(B_re, B_im))
-        C_re = torch.randn([out_features, state_features]) / math.sqrt(state_features)
-        C_im = torch.randn([out_features, state_features]) / math.sqrt(state_features)
+
+        # C_re = torch.randn([out_features, state_features]) / math.sqrt(state_features)
+        # C_im = torch.randn([out_features, state_features]) / math.sqrt(state_features)
+        # self.C = nn.Parameter(torch.complex(C_re, C_im))
+
+        C_re = torch.empty([out_features, state_features]) 
+        C_im = torch.empty([out_features, state_features])
+        torch.nn.init.kaiming_uniform_(C_re)
+        torch.nn.init.kaiming_uniform_(C_im)
         self.C = nn.Parameter(torch.complex(C_re, C_im))
+
         self.register_buffer(
             "state",
             torch.complex(
@@ -375,8 +403,9 @@ class SSM(nn.Module):
 
     def __init__(
         self,
-        in_features,
-        out_features,
+        input_size,
+        output_size,
+        lru_output_size,
         state_features,
         scan,
         mlp_hidden_size=30,
@@ -385,12 +414,14 @@ class SSM(nn.Module):
         max_phase=6.283,
     ):
         super().__init__()
-        self.mlp = MLP(out_features, mlp_hidden_size, out_features)
+        self.mlp = MLP(lru_output_size, mlp_hidden_size, output_size)
         self.LRUR = LRU(
-            in_features, out_features, state_features, scan, rmin, rmax, max_phase
+            input_size, lru_output_size, state_features, scan, rmin, rmax, max_phase
         )
         self.model = nn.Sequential(self.LRUR, self.mlp)
-        self.lin = nn.Linear(in_features, out_features, bias=False)
+
+        self.lin = nn.Linear(input_size, output_size, bias=False)
+        nn.init.kaiming_uniform_(self.lin.weight)
 
     def set_paramS(self):
         """
@@ -416,10 +447,11 @@ class SSM(nn.Module):
         Step pass of the SSM for online execution.
         """
 
-        out, state = self.LRUR.step(input, hidden_state)
-        out = self.mlp(out) + self.lin(input)
+        lru_out, state = self.LRUR.step(input, hidden_state)
 
-        return out, state
+        out = self.mlp(lru_out) + self.lin(input)
+
+        return out, state, lru_out
     
     def init_hidden(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """

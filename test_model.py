@@ -1,6 +1,7 @@
+from imp import new_module
 from onpolicy.algorithms.mad_MAPPOPolicy import MAD_MAPPOPolicy as Policy
-from onpolicy.algorithms.mad_actor_critic import MAD_Actor
-from onpolicy.algorithms.graph_actor_critic import GR_Actor, GR_Critic
+from onpolicy.algorithms.graph_test_policy import GraphTestPolicy
+from onpolicy.algorithms.graph_base_ssm_policy import GraphBaseSSMPolicy
 from multiagent.custom_scenarios.navigation_graph import Scenario
 from multiagent.environment import MultiAgentGraphEnv
 import numpy as np
@@ -81,7 +82,6 @@ _, parser = parse_args(args, parser)
 
 all_args, parser = graph_config(args, parser)
 
-
 # create world
 world = scenario.make_world(all_args)
 
@@ -97,99 +97,93 @@ env = MultiAgentGraphEnv(world=world, reset_callback=scenario.reset_world,
                     shared_viewer=True,
                     discrete_action=False)
 
-#mad_actor = MAD_Actor(all_args, env.observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 
-actor = GR_Actor(all_args, env.observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
-
-model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run31/models/actor.pt"
-
-actor.load_state_dict(torch.load(model_path))
+policy = GraphBaseSSMPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 
 
-# render call to create viewer window
-env.render()
+model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/gnn_ssm_base/run39/models/actor.pt"
+model_loaded = torch.load(model_path)
+
+
+# logger.info(f"Model loaded: {model_loaded}")
+policy.actor.load_state_dict(model_loaded)
 
 # execution loop
 obs_n, agent_id_n, node_obs_n, adj_n = env.reset()
 
-# Simple initialization - zeros for RNN and ZERO for masks (first step)
-rnn_states = np.zeros((1, all_args.recurrent_N, all_args.hidden_size), dtype=np.float32)
-masks = np.zeros((1, 1), dtype=np.float32)  # 0 = first step (seeds LRU with x0)
+# Initialize separate RNN states and masks for each agent
+rnn_states = np.zeros((env.n, all_args.recurrent_N, all_args.hidden_size), dtype=np.float32)
+masks = np.zeros((env.n, 1), dtype=np.float32)  # 0 = first step (seeds LRU with x0)
+
+# Initialize separate SSM states for each agent (MAD policy)
+# Each agent's SSM is seeded with their own initial observation x_0
+ssm_states = [None] * env.n  # Will be initialized in the first forward pass for each agent
 
 # Frame rate control for smooth animation
 target_fps = 30  # Adjust this value: higher = faster, lower = slower
 frame_time = 1.0 / target_fps
 
-# Collision tracking
-total_collisions = 0
-agent_collisions = 0
-obstacle_collisions = 0
-# Track previous collision counts for each agent
-prev_agent_collisions = np.zeros(env.n)
-prev_obstacle_collisions = np.zeros(env.n)
+num_collisions = 0
 
-step = 0
-while True:
-    frame_start = time.time()
-    act_n = []
+episodes = 10
+epsiode_length = 200
 
-    for i in range(env.n):
-        # Simple forward pass - reuse same RNN state and mask for all agents
-        with torch.no_grad():
-            action, _, _ = actor.forward(
-                obs=obs_n[i][None, :],  # Add batch dim
-                node_obs=node_obs_n[i][None, :, :],  # Add batch dim
-                adj=adj_n[i][None, :, :],  # Add batch dim
-                agent_id=np.array([agent_id_n[i]]),
-                rnn_states=rnn_states,
-                masks=masks,
-                deterministic=True
-            )
-
-        # For continuous action space, use actions directly
-        action_array = action[0].detach().cpu().numpy()  # Shape: (action_dim,)
-        act_n.append(action_array)
-
-    # After first step, set masks to 1 (continuation)
-    if step == 0:
-        masks = np.ones((1, 1), dtype=np.float32)
-
-    # step environment
-    obs_n, agent_id_n, node_obs_n, adj_n, reward_n, done_n, info_n = env.step(act_n)
-    step += 1
-
-    #print(obs_n[0].shape, node_obs_n[0].shape, adj_n[0].shape, len(agent_id_n), len(reward_n), len(done_n), len(info_n))
-
-    # Check for collisions by comparing with previous counts
-    step_collisions = 0
-    for i, info in enumerate(info_n):
-        # Check if agent collisions increased
-        curr_agent_coll = info.get('Num_agent_collisions', 0)
-        if curr_agent_coll > prev_agent_collisions[i]:
-            new_agent_colls = int(curr_agent_coll - prev_agent_collisions[i])
-            agent_collisions += new_agent_colls
-            step_collisions += new_agent_colls
-            print(f"[Step {step}] Agent {i} collided with another agent!")
-            prev_agent_collisions[i] = curr_agent_coll
-
-        # Check if obstacle collisions increased
-        curr_obst_coll = info.get('Num_obst_collisions', 0)
-        if curr_obst_coll > prev_obstacle_collisions[i]:
-            new_obst_colls = int(curr_obst_coll - prev_obstacle_collisions[i])
-            obstacle_collisions += new_obst_colls
-            step_collisions += new_obst_colls
-            print(f"[Step {step}] Agent {i} collided with an obstacle!")
-            prev_obstacle_collisions[i] = curr_obst_coll
-
-    if step_collisions > 0:
-        total_collisions += step_collisions
-        print(f"[Step {step}] Total collisions this step: {step_collisions}")
-        print(f"[Cumulative] Agent-Agent: {agent_collisions}, Agent-Obstacle: {obstacle_collisions}, Total: {total_collisions}\n")
-
-    # render
+for episode in range(episodes):
+    obs_n, agent_id_n, node_obs_n, adj_n = env.reset()
     env.render()
+    for step in range(epsiode_length):
+        frame_start = time.time()
+        act_n = []
 
-    # Maintain consistent frame rate for smooth animation
-    frame_elapsed = time.time() - frame_start
-    if frame_elapsed < frame_time:
-        time.sleep(frame_time - frame_elapsed)
+        for i in range(env.n):
+            # Each agent has its own RNN hidden state and SSM state
+            with torch.no_grad():
+                # Get full action
+                action, _, rnn_states_out, ssm_states_out, y = policy.actor.forward(
+                    obs=obs_n[i][None, :],  # Add batch dim
+                    node_obs=node_obs_n[i][None, :, :],  # Add batch dim
+                    adj=adj_n[i][None, :, :],  # Add batch dim
+                    agent_id=np.array([agent_id_n[i]]),
+                    rnn_states=rnn_states[i:i+1],  # Use this agent's RNN state
+                    ssm_states=ssm_states[i],  # Use this agent's SSM state
+                    masks=masks[i:i+1],  # Use this agent's mask
+                    deterministic=True
+                )
+
+                # Update this agent's RNN and SSM states for next timestep
+                rnn_states[i:i+1] = rnn_states_out
+                ssm_states[i] = ssm_states_out
+
+            # For continuous action space, use actions directly
+            action_array = action[0].detach().cpu().numpy()  # Shape: (action_dim,)
+
+            act_n.append(action_array)
+
+        # step environment
+        obs_n, agent_id_n, node_obs_n, adj_n, reward_n, done_n, info_n = env.step(act_n)
+
+        new_num_collisions = 0
+        for info in info_n:
+            if info["Num_agent_collisions"] > 0 or info["Num_obst_collisions"] > 0:
+                new_num_collisions += info["Num_agent_collisions"] + info["Num_obst_collisions"]
+
+        if new_num_collisions > num_collisions:
+            num_collisions = new_num_collisions
+            logger.info(f"Collision detected: {num_collisions}")
+
+        # Set all agent masks to 1 for next iteration (continuation)
+        masks = np.ones((env.n, 1), dtype=np.float32)
+
+        # render
+        env.render()
+
+        # Maintain consistent frame rate for smooth animation
+        frame_elapsed = time.time() - frame_start
+        if frame_elapsed < frame_time:
+            time.sleep(frame_time - frame_elapsed)
+
+    # Reset states for next episode
+    rnn_states = np.zeros((env.n, all_args.recurrent_N, all_args.hidden_size), dtype=np.float32)
+    masks = np.zeros((env.n, 1), dtype=np.float32)
+    ssm_states = [None] * env.n
+    num_collisions = 0

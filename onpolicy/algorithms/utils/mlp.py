@@ -15,6 +15,8 @@ class MLPLayer(nn.Module):
         layer_N: int,
         use_orthogonal: bool,
         use_ReLU: bool,
+        bias: bool = True,
+        use_layer_norm: bool = True
     ):
         super(MLPLayer, self).__init__()
         self._layer_N = layer_N
@@ -26,16 +28,24 @@ class MLPLayer(nn.Module):
         def init_(m):
             return init(m, init_method, lambda x: nn.init.constant_(x, 0), gain=gain)
 
-        self.fc1 = nn.Sequential(
-            init_(nn.Linear(input_dim, hidden_size)),
-            active_func,
-            nn.LayerNorm(hidden_size),
-        )
-        self.fc_h = nn.Sequential(
-            init_(nn.Linear(hidden_size, hidden_size)),
-            active_func,
-            nn.LayerNorm(hidden_size),
-        )
+        # Build fc1 with optional LayerNorm
+        fc1_layers = [
+            init_(nn.Linear(input_dim, hidden_size, bias=bias)),
+            active_func
+        ]
+        if use_layer_norm:
+            fc1_layers.append(nn.LayerNorm(hidden_size, bias=bias))
+        self.fc1 = nn.Sequential(*fc1_layers)
+
+        # Build fc_h with optional LayerNorm
+        fc_h_layers = [
+            init_(nn.Linear(hidden_size, hidden_size, bias=bias)),
+            active_func
+        ]
+        if use_layer_norm:
+            fc_h_layers.append(nn.LayerNorm(hidden_size, bias=bias))
+        self.fc_h = nn.Sequential(*fc_h_layers)
+
         self.fc2 = get_clones(self.fc_h, self._layer_N)
 
     def forward(self, x):
@@ -51,10 +61,18 @@ class MLPBase(nn.Module):
         args: argparse.Namespace,
         obs_shape: Union[List, Tuple],
         override_obs_dim: Optional[int] = None,
+        bias: bool = True,
+        use_layer_norm: bool = True,
+        use_feature_norm: Optional[bool] = None
     ):
         super(MLPBase, self).__init__()
 
-        self._use_feature_normalization = args.use_feature_normalization
+        # Allow override of feature normalization (for zero-preserving networks)
+        if use_feature_norm is None:
+            self._use_feature_normalization = args.use_feature_normalization
+        else:
+            self._use_feature_normalization = use_feature_norm
+
         self._use_orthogonal = args.use_orthogonal
         self._use_ReLU = args.use_ReLU
         self._stacked_frames = args.stacked_frames
@@ -77,6 +95,8 @@ class MLPBase(nn.Module):
             self._layer_N,
             self._use_orthogonal,
             self._use_ReLU,
+            bias=bias,
+            use_layer_norm=use_layer_norm
         )
 
     def forward(self, x: torch.tensor):

@@ -136,22 +136,31 @@ class GR_MAPPO():
             :return imp_weights: (torch.Tensor) 
                 importance sampling weights.
         """
-        # Handle both standard and MAD policy (MAD has extra lru_hidden_states)
-        if len(sample) == 17:
+        # Handle both standard and MAD policy (MAD has extra lru_hidden_states and pre_tanh_value)
+        if len(sample) == 18:
+            # Policy with LRU hidden states and pre_tanh_value
+            share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
+            share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
+            actions_batch, value_preds_batch, return_batch, masks_batch, \
+            active_masks_batch, old_action_log_probs_batch, adv_targ, \
+            available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch = sample
+        elif len(sample) == 17:
             # MAD policy with LRU hidden states
             share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
             share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
             actions_batch, value_preds_batch, return_batch, masks_batch, \
-            active_masks_batch,old_action_log_probs_batch, adv_targ, \
+            active_masks_batch, old_action_log_probs_batch, adv_targ, \
             available_actions_batch, lru_hidden_states_batch = sample
+            pre_tanh_value_batch = None
         else:
             # Standard policy
             share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
             share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
             actions_batch, value_preds_batch, return_batch, masks_batch, \
-            active_masks_batch,old_action_log_probs_batch, adv_targ, \
+            active_masks_batch, old_action_log_probs_batch, adv_targ, \
             available_actions_batch = sample
             lru_hidden_states_batch = None
+            pre_tanh_value_batch = None
 
         old_action_log_probs_batch = check(old_action_log_probs_batch).to(**self.tpdv)
         adv_targ = check(adv_targ).to(**self.tpdv)
@@ -186,7 +195,9 @@ class GR_MAPPO():
                                                         actions_batch,
                                                         masks_batch,
                                                         available_actions_batch,
-                                                        active_masks_batch
+                                                        active_masks_batch,
+                                                        lru_hidden_states_batch,
+                                                        pre_tanh_value_batch
                                                         )
         # actor update
         # print(f'obs: {obs_batch.shape}')

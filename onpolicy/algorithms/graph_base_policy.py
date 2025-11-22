@@ -125,6 +125,7 @@ class GR_BASE_MAPPO_Policy:
         share_agent_id,
         rnn_states_actor,
         rnn_states_critic,
+        ssm_states,
         masks,
         available_actions=None,
         deterministic=False,
@@ -147,6 +148,8 @@ class GR_BASE_MAPPO_Policy:
             If actor is RNN, RNN states for actor.
         rnn_states_critic: (np.ndarray)
             If critic is RNN, RNN states for critic.
+        ssm_states: (torch.Tensor or None)
+            SSM states for MAD policies (unused in base controller policy).
         masks: (np.ndarray)
             Denotes points at which RNN states should be reset.
         available_actions: (np.ndarray)
@@ -222,6 +225,7 @@ class GR_BASE_MAPPO_Policy:
         masks,
         available_actions=None,
         active_masks=None,
+        lru_hidden_states=None,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Get action logprobs / entropy and

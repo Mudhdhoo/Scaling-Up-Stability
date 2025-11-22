@@ -768,7 +768,7 @@ def graph_config(args, parser):
     parser.add_argument(
         "--kp_val",
         type=float,
-        default=0.1,
+        default=1.0,
         help="Initial value for learnable proportional gains in the base controller",
     )
 
@@ -789,10 +789,25 @@ def graph_config(args, parser):
     )
 
     parser.add_argument(
-        "--lru_hidden_dim",
+        "--use_ssm_plus_base",
+        action="store_true",
+        default=False,
+        help="Whether to use SSM plus base controller policy "
+        "SSM plus base controller policy decomposes control as u = u_base + |M(x0)| * D(neighbors) where u_base = K_p * (goal - current)",
+    )
+
+    parser.add_argument(
+        "--ssm_hidden_dim",
         type=int,
         default=64,
-        help="Hidden dimension for LRU (Linear Recurrent Unit) in MAD policy magnitude term",
+        help="Hidden dimension for SSM (State Space Model) in MAD policy magnitude term",
+    )
+
+    parser.add_argument(
+        "--ssm_mlp_hidden",
+        type=int,
+        default=64,
+        help="Hidden dimension for MLP in SSM (State Space Model) in MAD policy magnitude term",
     )
 
     all_args = parser.parse_known_args(args)[0]
@@ -813,4 +828,5 @@ def graph_config(args, parser):
         print(f"Overriding num_mini_batch to {num_mini_batch}")
         print(f"Batch size to be: {new_batch_size}")
         print("_" * 50)
+        
     return all_args, parser

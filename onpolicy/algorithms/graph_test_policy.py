@@ -1,6 +1,6 @@
 """
-MAD MAPPO Policy class.
-Wraps MAD Actor and Critic networks for stability-constrained RL.
+Graph-based MAPPO Policy with SSM Magnitude Term and Base Controller.
+Wraps actor and critic networks for multi-agent RL with GNN-based learning and SSM-based magnitude modulation.
 """
 import gymnasium as gym
 import argparse
@@ -8,29 +8,35 @@ import argparse
 import torch
 from torch import Tensor
 from typing import Tuple
-from onpolicy.algorithms.mad_actor_critic import MAD_GR_Actor, MAD_GR_Critic
+from onpolicy.algorithms.graph_test_actor_critic import GR_Test_Actor, GR_Test_Critic
 from onpolicy.utils.util import update_linear_schedule
 
 
-class MAD_MAPPOPolicy:
+class GraphTestPolicy:
     """
-    MAD MAPPO Policy class. Wraps MAD actor and critic networks
-    to compute actions and value function predictions with stability guarantees.
+    Graph-based MAPPO Policy with SSM magnitude term and base controller.
 
-    The policy uses MAD decomposition:
-        u_t = |M_t(x_0)| * D_t(neighborhood_states)
+    The policy uses the decomposition:
+        u_t = u_base + |M_t(rel_goal_t=0)| * D_t(neighborhood_states)
 
     where:
-        - M_t is an LRU-based magnitude term ensuring stability
-        - D_t is a GNN-based stochastic direction term
+        - u_base = K_p * rel_goal is a proportional base controller
+        - M_t is an SSM-based magnitude term "kickstarted" with relative goal at t=0
+        - D_t is a GNN-based stochastic direction term (normalized via tanh)
+
+    Key Features:
+        - Base controller provides task-relevant baseline behavior
+        - SSM magnitude term is seeded with relative goal at episode start, then receives zeros
+        - GNN direction term learns from neighborhood observations
+        - Total action is base + magnitude * direction
 
     Args:
         args: Arguments containing relevant model and policy information
         obs_space: Observation space
         cent_obs_space: Centralized observation space (for critic)
-        node_obs_space: Node observation space
+        node_obs_space: Node observation space (graph features)
         edge_obs_space: Edge observation space
-        act_space: Action space
+        act_space: Action space (must be continuous/Box)
         device: Device to run on (cpu/gpu)
     """
 
@@ -58,7 +64,7 @@ class MAD_MAPPOPolicy:
         self.split_batch = args.split_batch
         self.max_batch_size = args.max_batch_size
 
-        self.actor = MAD_GR_Actor(
+        self.actor = GR_Test_Actor(
             args,
             self.obs_space,
             self.node_obs_space,
@@ -68,7 +74,7 @@ class MAD_MAPPOPolicy:
             self.split_batch,
             self.max_batch_size,
         )
-        self.critic = MAD_GR_Critic(
+        self.critic = GR_Test_Critic(
             args,
             self.share_obs_space,
             self.node_obs_space,
@@ -122,11 +128,11 @@ class MAD_MAPPOPolicy:
         share_agent_id,
         rnn_states_actor,
         rnn_states_critic,
-        ssm_states,
+        ssm_states,  # Added for compatibility with runner (not used by this policy)
         masks,
         available_actions=None,
         deterministic=False,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """
         Compute actions and value function predictions for the given inputs.
 
@@ -139,7 +145,7 @@ class MAD_MAPPOPolicy:
             share_agent_id: Agent id for centralized observations
             rnn_states_actor: RNN states for actor
             rnn_states_critic: RNN states for critic
-            ssm_states: SSM hidden states for MAD policy
+            ssm_states: SSM hidden states for magnitude term
             masks: Reset masks
             available_actions: Available actions (if None, all available)
             deterministic: Whether to use deterministic actions
@@ -150,15 +156,14 @@ class MAD_MAPPOPolicy:
             action_log_probs: Log probabilities of chosen actions
             rnn_states_actor: Updated actor RNN states
             rnn_states_critic: Updated critic RNN states
-            ssm_states: Updated SSM hidden states
+            pre_tanh_value: Raw Gaussian sample y (for correct policy gradient evaluation)
         """
-        actions, action_log_probs, rnn_states_actor, ssm_states = self.actor.forward(
+        actions, action_log_probs, rnn_states_actor, pre_tanh_value = self.actor.forward(
             obs,
             node_obs,
             adj,
             agent_id,
             rnn_states_actor,
-            ssm_states,
             masks,
             available_actions,
             deterministic,
@@ -167,7 +172,7 @@ class MAD_MAPPOPolicy:
         values, rnn_states_critic = self.critic.forward(
             cent_obs, node_obs, adj, share_agent_id, rnn_states_critic, masks
         )
-        return values, actions, action_log_probs, rnn_states_actor, rnn_states_critic, ssm_states
+        return values, actions, action_log_probs, rnn_states_actor, rnn_states_critic, pre_tanh_value
 
     def get_values(
         self, cent_obs, node_obs, adj, share_agent_id, rnn_states_critic, masks
@@ -205,7 +210,8 @@ class MAD_MAPPOPolicy:
         masks,
         available_actions=None,
         active_masks=None,
-        lru_hidden_states=None,
+        lru_hidden_states=None,  # Added for compatibility with runner (not used by this policy)
+        pre_tanh_value=None,  # Raw Gaussian sample y for correct policy gradients
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Get action logprobs / entropy and value function predictions for actor update.
@@ -223,6 +229,7 @@ class MAD_MAPPOPolicy:
             masks: Reset masks
             available_actions: Available actions
             active_masks: Active agent masks
+            pre_tanh_value: Raw Gaussian sample y stored during rollout
 
         Returns:
             values: Value function predictions
@@ -235,11 +242,11 @@ class MAD_MAPPOPolicy:
             adj,
             agent_id,
             rnn_states_actor,
-            lru_hidden_states,
             action,
             masks,
             available_actions,
             active_masks,
+            pre_tanh_value,
         )
 
         values, _ = self.critic.forward(
@@ -254,7 +261,6 @@ class MAD_MAPPOPolicy:
         adj,
         agent_id,
         rnn_states_actor,
-        ssm_states,
         masks,
         available_actions=None,
         deterministic=False,
@@ -268,7 +274,6 @@ class MAD_MAPPOPolicy:
             adj: Adjacency matrix
             agent_id: Agent id for nodes
             rnn_states_actor: RNN states for actor
-            ssm_states: SSM hidden states for MAD policy
             masks: Reset masks
             available_actions: Available actions
             deterministic: Whether to use deterministic actions
@@ -276,17 +281,15 @@ class MAD_MAPPOPolicy:
         Returns:
             actions: Actions to take
             rnn_states_actor: Updated actor RNN states
-            ssm_states: Updated SSM hidden states
         """
-        actions, _, rnn_states_actor, ssm_states = self.actor.forward(
+        actions, _, rnn_states_actor = self.actor.forward(
             obs,
             node_obs,
             adj,
             agent_id,
             rnn_states_actor,
-            ssm_states,
             masks,
             available_actions,
             deterministic,
         )
-        return actions, rnn_states_actor, ssm_states
+        return actions, rnn_states_actor

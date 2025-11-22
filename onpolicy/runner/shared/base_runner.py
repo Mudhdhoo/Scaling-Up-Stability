@@ -9,6 +9,7 @@ from tensorboardX import SummaryWriter  # tensorboardX to work with macos
 from onpolicy.utils.shared_buffer import SharedReplayBuffer
 from onpolicy.utils.graph_buffer import GraphReplayBuffer
 from loguru import logger
+import time
 
 def _t2n(x):
     """Convert torch tensor to a numpy array."""
@@ -78,13 +79,22 @@ class Runner(object):
         # Select policy based on environment and policy type
         use_mad_policy = getattr(self.all_args, 'use_mad_policy', False)
 
+        # from onpolicy.algorithms.graph_test_policy import GraphTestPolicy as Policy
+        # from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
+
         if self.all_args.env_name == "GraphMPE":
             if use_mad_policy:
+                logger.info("Using MAD policy")
                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
                 from onpolicy.algorithms.mad_MAPPOPolicy import MAD_MAPPOPolicy as Policy
             elif self.all_args.use_gnn_plus_base:
+                 logger.info("Using GNN plus base policy")
                  from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
                  from onpolicy.algorithms.graph_base_policy import GR_BASE_MAPPO_Policy as Policy
+            elif self.all_args.use_ssm_plus_base:
+                 logger.info("Using SSM plus base policy")
+                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
+                 from onpolicy.algorithms.graph_base_ssm_policy import GraphBaseSSMPolicy as Policy
             else:
                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
                 from onpolicy.algorithms.graph_MAPPOPolicy import GR_MAPPOPolicy as Policy
@@ -113,6 +123,7 @@ class Runner(object):
                 self.envs.action_space[0],
                 device=self.device,
             )
+
         else:
             self.policy = Policy(
                 self.all_args,
@@ -121,6 +132,16 @@ class Runner(object):
                 self.envs.action_space[0],
                 device=self.device,
             )
+
+        # Verify zero-preservation for MAD policy
+        if use_mad_policy:
+            biases = [name for name, param in self.policy.actor.named_parameters() if 'bias' in name and 'magnitude' in name]
+            if len(biases) > 0:
+                logger.error(f"ERROR: Found {len(biases)} biases in magnitude pathway: {biases}")
+                logger.error("This breaks zero-preservation and L_p-stability!")
+                raise RuntimeError("Magnitude pathway has biases - zero-preservation violated!")
+            else:
+                logger.info("✓ Zero-preservation verified: No biases found in magnitude pathway")
 
         if self.model_dir is not None:
             print(f"Restoring from checkpoint stored in {self.model_dir}")

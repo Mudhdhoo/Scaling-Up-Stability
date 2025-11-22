@@ -12,6 +12,7 @@ from onpolicy.algorithms.utils.rnn import RNNLayer
 from onpolicy.algorithms.utils.act import ACTLayer
 from onpolicy.algorithms.utils.popart import PopArt
 from onpolicy.utils.util import get_shape_from_obs_space
+from onpolicy.algorithms.utils.ssm import SSM
 from loguru import logger
 
 def minibatchGenerator(
@@ -30,10 +31,10 @@ def minibatchGenerator(
         )
 
 
-class GR_Base_Actor(nn.Module):
+class GR_Base_SSM_Actor(nn.Module):
     """
-    Actor network with proportional base controller for MAPPO.
-    Outputs actions as: u = u_base + u_gnn
+    Actor network with SSM and proportional base controller for MAPPO.
+    Outputs actions as: u = u_base + |M(x0)| * u_gnn
     where u_base = K_p * (goal - pos) is a proportional controller
     and u_gnn is learned from GNN features.
 
@@ -70,7 +71,7 @@ class GR_Base_Actor(nn.Module):
         split_batch: bool = False,
         max_batch_size: int = 32,
     ) -> None:
-        super(GR_Base_Actor, self).__init__()
+        super(GR_Base_SSM_Actor, self).__init__()
         self.args = args
         self.hidden_size = args.hidden_size
 
@@ -108,6 +109,22 @@ class GR_Base_Actor(nn.Module):
             action_space, self.hidden_size, self._use_orthogonal, self._gain
         )
 
+
+        ssm_state_features = getattr(args, 'ssm_hidden_dim', 64)
+        ssm_mlp_hidden = getattr(args, 'ssm_mlp_hidden', 64)
+
+
+        self.ssm = SSM(
+            input_size=2,
+            output_size=1,
+            lru_output_size=self.hidden_size,
+            state_features=ssm_state_features,
+            scan=False,
+            mlp_hidden_size=ssm_mlp_hidden,
+            rmin=0.8,
+            rmax=0.95,
+        )
+
         self.to(device)
 
     def forward(
@@ -117,6 +134,7 @@ class GR_Base_Actor(nn.Module):
         adj,
         agent_id,
         rnn_states,
+        ssm_states,
         masks,
         available_actions=None,
         deterministic=False,
@@ -158,6 +176,43 @@ class GR_Base_Actor(nn.Module):
         if available_actions is not None:
             available_actions = check(available_actions).to(**self.tpdv)
 
+        batch_size = obs.shape[0]
+
+        # Detect episode resets (mask == 0)
+        reset_mask = (masks.squeeze(-1) == 0)
+        reset_indices = reset_mask.nonzero(as_tuple=True)[0]
+
+        # Initialize or reset SSM hidden states
+        if ssm_states is None or ssm_states.shape[0] != batch_size:
+            # Initialize for all environments
+            ssm_states = torch.complex(
+                torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
+                torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
+            )
+        elif len(reset_indices) > 0:
+            # Reset only environments that are resetting
+            ssm_states = ssm_states.clone()  # Clone to avoid in-place modification
+            for idx in reset_indices:
+                ssm_states[idx] = torch.complex(
+                    torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
+                    torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
+                )
+
+        # ==================== SSM Input: Kickstart with Relative Goal ====================
+        # Extract relative goal from observations
+        # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
+        rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
+
+        # SSM input: relative goal at t=0 (reset), zeros otherwise
+        # This "kickstarts" the SSM with the task-relevant information at episode start
+        ssm_input = torch.where(
+            reset_mask.unsqueeze(-1).expand_as(rel_goal),
+            rel_goal,  # At reset: use relative goal (2D)
+            torch.zeros_like(rel_goal)  # Otherwise: zero input (2D)
+        )
+
+        #logger.info(f'ssm_input: {ssm_input}')
+
         # if batch size is big, split into smaller batches, forward pass and then concatenate
         if (self.split_batch) and (obs.shape[0] > self.max_batch_size):
             # print(f'Actor obs: {obs.shape[0]}')
@@ -182,23 +237,44 @@ class GR_Base_Actor(nn.Module):
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
-        # GNN outputs a learned adjustment (continuous action space required)
-        # For continuous action space (Box), self.act outputs 2D continuous actions
-        u_gnn, action_log_probs = self.act(
+        # Sample from Gaussian distribution
+        # y is the raw Gaussian sample, y_log_probs is log p(y)
+        y, y_log_probs = self.act(
             actor_features, available_actions, deterministic
         )
 
-        u_gnn = torch.tanh(u_gnn)  # Tanh for |D(x)| ≤ 1
+        # Direction term: apply tanh to ensure |u_gnn| ≤ 1
+        u_gnn = torch.tanh(y)
 
-        # Observation structure: [vel_x, vel_y, pos_x, pos_y, goal_x, goal_y, ...]
+        # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
         rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
         u_base = self.K_p * rel_goal  # Broadcasting K_p
 
-        # Total action: base controller + learned GNN adjustment
-        actions = u_base + u_gnn
-        actions = actions 
-    
-        return (actions, action_log_probs, rnn_states)
+        # Pass SSM input through the state space model (online step-by-step execution)
+        # SSM outputs magnitude term M(x_0)
+        ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
+
+        # Take absolute value and clamp to prevent extreme Jacobian values
+        # Clamping to [0.01, 10.0] prevents log(magnitude) from being too negative or too positive
+        magnitude = ssm_out_raw.abs().clamp(min=0.01, max=10.0)
+      #  logger.info(f'magnitude: {magnitude}')
+
+        # Total action: base controller + magnitude * direction
+        # action = u_base + |M| * tanh(y)
+        actions = u_base + magnitude * u_gnn
+
+        # Jacobian correction for the transformation: action = u_base + M * tanh(y)
+        # log p(action) = log p(y) - log|det(J)|
+        # J = d(action)/dy = M * diag(1 - tanh(y)^2)
+        # log|det(J)| = sum(log|M|) + sum(log(1 - tanh(y)^2))
+        action_dim = u_gnn.shape[-1]
+        log_jac_tanh = torch.log(1 - u_gnn.pow(2) + 1e-8).sum(-1, keepdim=True)
+        log_jac_M = torch.log(magnitude + 1e-8).sum(-1, keepdim=True) * action_dim
+
+        action_log_probs = y_log_probs - log_jac_M - log_jac_tanh
+
+        # Return y (pre-tanh value) for correct policy gradient computation during evaluation
+        return (actions, action_log_probs, rnn_states, ssm_states, y)
 
     def evaluate_actions(
         self,
@@ -207,22 +283,19 @@ class GR_Base_Actor(nn.Module):
         adj,
         agent_id,
         rnn_states,
+        ssm_states,
         action,
         masks,
         available_actions=None,
         active_masks=None,
+        pre_tanh_value=None,  # Not used - kept for API compatibility
     ) -> Tuple[Tensor, Tensor]:
         """
         Compute log probability and entropy of given actions.
 
-        IMPORTANT: The 'action' parameter contains TOTAL actions (u_base + u_gnn)
-        stored in the buffer. This method:
-        1. Recomputes u_base deterministically from observations
-        2. Extracts u_gnn = action - u_base
-        3. Evaluates log_prob(u_gnn) under the current policy
-
-        This is correct because only u_gnn is stochastic (learned from the policy),
-        while u_base is deterministic.
+        IMPORTANT: This method recovers y from the stored action using the current
+        magnitude M_new. This is critical for correct PPO importance sampling when
+        the magnitude changes between collection and evaluation.
 
         obs: (torch.Tensor)
             Observation inputs into network.
@@ -233,9 +306,11 @@ class GR_Base_Actor(nn.Module):
         agent_id (np.ndarray / torch.Tensor)
             The agent id to which the observation belongs to
         action: (torch.Tensor)
-            Total actions (u_base + u_gnn) stored in buffer.
+            Total actions (u_base + M*tanh(y)) stored in buffer.
         rnn_states: (torch.Tensor)
             If RNN network, hidden states for RNN.
+        ssm_states: (torch.Tensor)
+            SSM hidden states for this timestep.
         masks: (torch.Tensor)
             Mask tensor denoting if hidden states
             should be reinitialized to zeros.
@@ -244,9 +319,11 @@ class GR_Base_Actor(nn.Module):
             (if None, all actions available)
         active_masks: (torch.Tensor)
             Denotes whether an agent is active or dead.
+        pre_tanh_value: (torch.Tensor)
+            Not used - kept for API compatibility.
 
         :return action_log_probs: (torch.Tensor)
-            Log probabilities of u_gnn under current policy.
+            Log probabilities under current policy.
         :return dist_entropy: (torch.Tensor)
             Action distribution entropy for the given inputs.
         """
@@ -263,15 +340,79 @@ class GR_Base_Actor(nn.Module):
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
 
+        # Note: pre_tanh_value is not used - we recover y from action for correct importance sampling
 
+        batch_size = obs.shape[0]
+
+        # Detect episode resets (mask == 0)
+        reset_mask = (masks.squeeze(-1) == 0)
+        reset_indices = reset_mask.nonzero(as_tuple=True)[0]
+
+        # Initialize or reset SSM hidden states if needed
+        if ssm_states is None:
+            # Initialize for all environments (states not in buffer)
+            ssm_states = torch.complex(
+                torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
+                torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
+            )
+        else:
+            # SSM states exist, convert from buffer format if needed
+            # Buffer stores as numpy [batch, state_dim, 2] with [real, imag] components
+            import numpy as np
+            if isinstance(ssm_states, np.ndarray):
+                # Convert from numpy to torch.complex
+                ssm_states = check(ssm_states).to(**self.tpdv)
+                ssm_states = torch.complex(ssm_states[..., 0], ssm_states[..., 1])
+            elif not torch.is_complex(ssm_states):
+                # Already torch tensor but not complex, convert
+                ssm_states = ssm_states.to(**self.tpdv)
+                ssm_states = torch.complex(ssm_states[..., 0], ssm_states[..., 1])
+
+            # Check size and reset if needed
+            if ssm_states.shape[0] != batch_size:
+                ssm_states = torch.complex(
+                    torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
+                    torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
+                )
+
+        # Reset specific indices if episodes ended
+        if len(reset_indices) > 0:
+            # Reset only environments that are resetting
+            ssm_states = ssm_states.clone()  # Clone to avoid in-place modification
+            for idx in reset_indices:
+                ssm_states[idx] = torch.complex(
+                    torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
+                    torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
+                )
+
+        # ==================== SSM Input: Kickstart with Relative Goal ====================
+        # Extract relative goal from observations (same as forward method)
+        # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
         rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
+
+        # SSM input: relative goal at t=0 (reset), zeros otherwise
+        ssm_input = torch.where(
+            reset_mask.unsqueeze(-1).expand_as(rel_goal),
+            rel_goal,  # At reset: use relative goal (2D)
+            torch.zeros_like(rel_goal)  # Otherwise: zero input (2D)
+        )
+
         u_base = self.K_p * rel_goal  # Broadcasting K_p
 
-        # Extract the learned component: u_gnn = action - u_base
-        u_gnn_tanh = torch.clamp(action - u_base, -0.999, 0.999)
+        # Pass SSM input through the state space model (online step-by-step execution)
+        # This recomputes ssm_out with current parameters for gradient flow
+        ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
 
-        u_gnn = 0.5 * torch.log((1 + u_gnn_tanh) / (1 - u_gnn_tanh))
+        # Take absolute value and clamp to prevent extreme Jacobian values (consistent with forward)
+        ssm_out = ssm_out_raw.abs().clamp(min=0.01, max=10.0)
 
+        # CRITICAL: Must recover y from stored action using NEW magnitude for correct PPO importance sampling
+        # The stored action was: action = u_base + M_old * tanh(y_old)
+        # Under the new policy with M_new, the corresponding y is:
+        # y_new = atanh((action - u_base) / M_new)
+        # Using stored y_old would compute probability at wrong action point!
+        u_gnn_tanh = torch.clamp((action - u_base) / (ssm_out + 1e-8), -0.999, 0.999)
+        y = torch.atanh(u_gnn_tanh)
 
         # if batch size is big, split into smaller batches, forward pass and then concatenate
         if (self.split_batch) and (obs.shape[0] > self.max_batch_size):
@@ -297,18 +438,33 @@ class GR_Base_Actor(nn.Module):
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
-        # Evaluate log probs of the learned component (u_gnn), not total action
-        action_log_probs, dist_entropy = self.act.evaluate_actions(
+        # Evaluate log probs of the Gaussian sample y under current policy
+        y_log_probs, dist_entropy_y = self.act.evaluate_actions(
             actor_features,
-            u_gnn,
+            y,
             available_actions,
             active_masks=active_masks if self._use_policy_active_masks else None,
         )
 
+        action_dim = u_gnn_tanh.shape[-1]
+
+        # Jacobian correction for the transformation: action = u_base + M * tanh(y)
+        # Gradients to SSM flow through log_jac_M term
+        log_jac_tanh = torch.log(1 - u_gnn_tanh.pow(2) + 1e-8).sum(-1, keepdim=True)
+        log_jac_M = torch.log(ssm_out + 1e-8).sum(-1, keepdim=True) * action_dim
+
+        action_log_probs = y_log_probs - log_jac_M - log_jac_tanh
+
+        # Correct entropy for the transformed distribution: H(action) = H(y) + E[log|det(J)|]
+        # The Jacobian terms contribute positively to entropy (larger M = more spread = higher entropy)
+        # This balances the -log|M| penalty in log_prob, preventing magnitude collapse
+        log_det_jacobian = log_jac_M + log_jac_tanh
+        dist_entropy = dist_entropy_y + log_det_jacobian.mean()
+
         return (action_log_probs, dist_entropy)
 
 
-class GR_Base_Critic(nn.Module):
+class GR_Base_SSM_Critic(nn.Module):
     """
     Critic network class for MAPPO. Outputs value function predictions
     given centralized input (MAPPO) or local observations (IPPO).
@@ -339,7 +495,7 @@ class GR_Base_Critic(nn.Module):
         split_batch: bool = False,
         max_batch_size: int = 32,
     ) -> None:
-        super(GR_Base_Critic, self).__init__()
+        super(GR_Base_SSM_Critic, self).__init__()
         self.args = args
         self.hidden_size = args.hidden_size
         self._use_orthogonal = args.use_orthogonal

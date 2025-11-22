@@ -46,8 +46,9 @@ class GMPERunner(Runner):
                     action_log_probs,
                     rnn_states,
                     rnn_states_critic,
-                    lru_hidden_states,
+                    ssm_states,
                     actions_env,
+                    pre_tanh_value,
                 ) = self.collect(step)
 
                 # Obs reward and next obs
@@ -71,7 +72,8 @@ class GMPERunner(Runner):
                     action_log_probs,
                     rnn_states,
                     rnn_states_critic,
-                    lru_hidden_states,
+                    ssm_states,
+                    pre_tanh_value,
                 )
 
                 # insert data into buffer
@@ -137,10 +139,26 @@ class GMPERunner(Runner):
         self.buffer.adj[0] = adj.copy()
         self.buffer.agent_id[0] = agent_id.copy()
         self.buffer.share_agent_id[0] = share_agent_id.copy()
+        # Set masks[0] = 0 to indicate episode start (critical for SSM reset logic)
+        self.buffer.masks[0] = np.zeros(
+            (self.n_rollout_threads, self.num_agents, 1), dtype=np.float32
+        )
 
     @torch.no_grad()
     def collect(self, step: int) -> Tuple[arr, arr, arr, arr, arr, arr, arr]:
         self.trainer.prep_rollout()
+
+        # Prepare SSM states for MAD policy
+        if self.buffer.lru_hidden_states is not None:
+            # Convert from numpy [batch, agents, hidden_dim, 2] to torch.complex
+            ssm_states_np = np.concatenate(self.buffer.lru_hidden_states[step])
+            ssm_states = torch.complex(
+                torch.from_numpy(ssm_states_np[..., 0]),
+                torch.from_numpy(ssm_states_np[..., 1])
+            ).to(self.device)
+        else:
+            ssm_states = None
+
         policy_output = self.trainer.policy.get_actions(
             np.concatenate(self.buffer.share_obs[step]),
             np.concatenate(self.buffer.obs[step]),
@@ -150,17 +168,23 @@ class GMPERunner(Runner):
             np.concatenate(self.buffer.share_agent_id[step]),
             np.concatenate(self.buffer.rnn_states[step]),
             np.concatenate(self.buffer.rnn_states_critic[step]),
+            ssm_states,
             np.concatenate(self.buffer.masks[step]),
         )
 
-        # Handle both standard policy (5 outputs) and MAD policy (6 outputs)
+        # Handle policy outputs with different numbers of returns
         if len(policy_output) == 6:
-            # MAD policy returns LRU hidden states
-            value, action, action_log_prob, rnn_states, rnn_states_critic, lru_hidden = policy_output
+            # Policy returns pre_tanh_value (y) for correct policy gradients
+            value, action, action_log_prob, rnn_states, rnn_states_critic, pre_tanh_value = policy_output
+            ssm_states = None
+        elif len(policy_output) == 7:
+            # MAD policy returns SSM hidden states and pre_tanh_value
+            value, action, action_log_prob, rnn_states, rnn_states_critic, ssm_states, pre_tanh_value = policy_output
         else:
-            # Standard policy
+            # Standard policy (5 outputs)
             value, action, action_log_prob, rnn_states, rnn_states_critic = policy_output
-            lru_hidden = None
+            ssm_states = None
+            pre_tanh_value = None
 
         # [self.envs, agents, dim]
         values = np.array(np.split(_t2n(value), self.n_rollout_threads))
@@ -172,10 +196,19 @@ class GMPERunner(Runner):
         rnn_states_critic = np.array(
             np.split(_t2n(rnn_states_critic), self.n_rollout_threads)
         )
-        if lru_hidden is not None:
-            lru_hidden_states = np.array(np.split(_t2n(lru_hidden), self.n_rollout_threads))
+
+        # Convert SSM states from torch.complex to numpy [batch, agents, hidden_dim, 2]
+        if ssm_states is not None:
+            ssm_states_np = torch.stack([ssm_states.real, ssm_states.imag], dim=-1)
+            ssm_states = np.array(np.split(_t2n(ssm_states_np), self.n_rollout_threads))
         else:
-            lru_hidden_states = None
+            ssm_states = None
+
+        # Convert pre_tanh_value (y) to numpy
+        if pre_tanh_value is not None:
+            pre_tanh_value = np.array(np.split(_t2n(pre_tanh_value), self.n_rollout_threads))
+        else:
+            pre_tanh_value = None
         # rearrange action
         if self.envs.action_space[0].__class__.__name__ == "MultiDiscrete":
             for i in range(self.envs.action_space[0].shape):
@@ -202,8 +235,9 @@ class GMPERunner(Runner):
             action_log_probs,
             rnn_states,
             rnn_states_critic,
-            lru_hidden_states,
+            ssm_states,
             actions_env,
+            pre_tanh_value,
         )
 
     def insert(self, data):
@@ -221,7 +255,8 @@ class GMPERunner(Runner):
             action_log_probs,
             rnn_states,
             rnn_states_critic,
-            lru_hidden_states,
+            ssm_states,
+            pre_tanh_value,
         ) = data
 
         rnn_states[dones == True] = np.zeros(
@@ -232,6 +267,12 @@ class GMPERunner(Runner):
             ((dones == True).sum(), *self.buffer.rnn_states_critic.shape[3:]),
             dtype=np.float32,
         )
+        # Reset SSM states for ended episodes (critical for correct state management)
+        if ssm_states is not None and self.buffer.lru_hidden_states is not None:
+            ssm_states[dones == True] = np.zeros(
+                ((dones == True).sum(), *self.buffer.lru_hidden_states.shape[3:]),
+                dtype=np.float32,
+            )
         masks = np.ones((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
         masks[dones == True] = np.zeros(((dones == True).sum(), 1), dtype=np.float32)
 
@@ -266,7 +307,8 @@ class GMPERunner(Runner):
             values,
             rewards,
             masks,
-            lru_hidden_states=lru_hidden_states,
+            lru_hidden_states=ssm_states,
+            pre_tanh_value=pre_tanh_value,
         )
 
     @torch.no_grad()
@@ -297,17 +339,53 @@ class GMPERunner(Runner):
             (self.n_eval_rollout_threads, self.num_agents, 1), dtype=np.float32
         )
 
+        # Initialize SSM states for MAD policy
+        if self.buffer.lru_hidden_states is not None:
+            eval_ssm_states = np.zeros(
+                (self.n_eval_rollout_threads, *self.buffer.lru_hidden_states.shape[2:]),
+                dtype=np.float32,
+            )
+        else:
+            eval_ssm_states = None
+
         for eval_step in range(self.episode_length):
             self.trainer.prep_rollout()
-            eval_action, eval_rnn_states = self.trainer.policy.act(
-                np.concatenate(eval_obs),
-                np.concatenate(eval_node_obs),
-                np.concatenate(eval_adj),
-                np.concatenate(eval_agent_id),
-                np.concatenate(eval_rnn_states),
-                np.concatenate(eval_masks),
-                deterministic=True,
-            )
+
+            # Prepare SSM states
+            if eval_ssm_states is not None:
+                ssm_states = torch.complex(
+                    torch.from_numpy(np.concatenate(eval_ssm_states)[..., 0]),
+                    torch.from_numpy(np.concatenate(eval_ssm_states)[..., 1])
+                ).to(self.device)
+            else:
+                ssm_states = None
+
+            # Call policy.act() with appropriate parameters
+            if eval_ssm_states is not None:
+                eval_action, eval_rnn_states, ssm_states = self.trainer.policy.act(
+                    np.concatenate(eval_obs),
+                    np.concatenate(eval_node_obs),
+                    np.concatenate(eval_adj),
+                    np.concatenate(eval_agent_id),
+                    np.concatenate(eval_rnn_states),
+                    ssm_states,
+                    np.concatenate(eval_masks),
+                    deterministic=True,
+                )
+                # Convert SSM states back to numpy
+                ssm_states_np = torch.stack([ssm_states.real, ssm_states.imag], dim=-1)
+                eval_ssm_states = np.array(np.split(_t2n(ssm_states_np), self.n_eval_rollout_threads))
+            else:
+                eval_action, eval_rnn_states = self.trainer.policy.act(
+                    np.concatenate(eval_obs),
+                    np.concatenate(eval_node_obs),
+                    np.concatenate(eval_adj),
+                    np.concatenate(eval_agent_id),
+                    np.concatenate(eval_rnn_states),
+                    np.concatenate(eval_masks),
+                    deterministic=True,
+                )
+
             eval_actions = np.array(
                 np.split(_t2n(eval_action), self.n_eval_rollout_threads)
             )
@@ -354,6 +432,12 @@ class GMPERunner(Runner):
                 ((eval_dones == True).sum(), self.recurrent_N, self.hidden_size),
                 dtype=np.float32,
             )
+            # Reset SSM states on episode end
+            if eval_ssm_states is not None:
+                eval_ssm_states[eval_dones == True] = np.zeros(
+                    ((eval_dones == True).sum(), *self.buffer.lru_hidden_states.shape[3:]),
+                    dtype=np.float32,
+                )
             eval_masks = np.ones(
                 (self.n_eval_rollout_threads, self.num_agents, 1), dtype=np.float32
             )
@@ -414,25 +498,60 @@ class GMPERunner(Runner):
                 (self.n_rollout_threads, self.num_agents, 1), dtype=np.float32
             )
 
+            # Initialize SSM states for MAD policy
+            if self.buffer.lru_hidden_states is not None:
+                ssm_states = np.zeros(
+                    (self.n_rollout_threads, *self.buffer.lru_hidden_states.shape[2:]),
+                    dtype=np.float32,
+                )
+            else:
+                ssm_states = None
+
             episode_rewards = []
 
             for step in range(self.episode_length):
                 calc_start = time.time()
 
                 self.trainer.prep_rollout()
-                action, rnn_states = self.trainer.policy.act(
-                    np.concatenate(obs),
-                    np.concatenate(node_obs),
-                    np.concatenate(adj),
-                    np.concatenate(agent_id),
-                    np.concatenate(rnn_states),
-                    np.concatenate(masks),
-                    deterministic=True,
-                )
+
+                # Prepare SSM states
+                if ssm_states is not None:
+                    ssm_states_torch = torch.complex(
+                        torch.from_numpy(np.concatenate(ssm_states)[..., 0]),
+                        torch.from_numpy(np.concatenate(ssm_states)[..., 1])
+                    ).to(self.device)
+                else:
+                    ssm_states_torch = None
+
+                # Call policy.act() with appropriate parameters
+                if ssm_states is not None:
+                    action, rnn_states_out, ssm_states_torch = self.trainer.policy.act(
+                        np.concatenate(obs),
+                        np.concatenate(node_obs),
+                        np.concatenate(adj),
+                        np.concatenate(agent_id),
+                        np.concatenate(rnn_states),
+                        ssm_states_torch,
+                        np.concatenate(masks),
+                        deterministic=True,
+                    )
+                    # Convert SSM states back to numpy
+                    ssm_states_np = torch.stack([ssm_states_torch.real, ssm_states_torch.imag], dim=-1)
+                    ssm_states = np.array(np.split(_t2n(ssm_states_np), self.n_rollout_threads))
+                    rnn_states = np.array(np.split(_t2n(rnn_states_out), self.n_rollout_threads))
+                else:
+                    action, rnn_states_out = self.trainer.policy.act(
+                        np.concatenate(obs),
+                        np.concatenate(node_obs),
+                        np.concatenate(adj),
+                        np.concatenate(agent_id),
+                        np.concatenate(rnn_states),
+                        np.concatenate(masks),
+                        deterministic=True,
+                    )
+                    rnn_states = np.array(np.split(_t2n(rnn_states_out), self.n_rollout_threads))
+
                 actions = np.array(np.split(_t2n(action), self.n_rollout_threads))
-                rnn_states = np.array(
-                    np.split(_t2n(rnn_states), self.n_rollout_threads)
-                )
 
                 if envs.action_space[0].__class__.__name__ == "MultiDiscrete":
                     for i in range(envs.action_space[0].shape):
@@ -465,6 +584,12 @@ class GMPERunner(Runner):
                     ((dones == True).sum(), self.recurrent_N, self.hidden_size),
                     dtype=np.float32,
                 )
+                # Reset SSM states on episode end
+                if ssm_states is not None:
+                    ssm_states[dones == True] = np.zeros(
+                        ((dones == True).sum(), *self.buffer.lru_hidden_states.shape[3:]),
+                        dtype=np.float32,
+                    )
                 masks = np.ones(
                     (self.n_rollout_threads, self.num_agents, 1), dtype=np.float32
                 )
