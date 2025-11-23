@@ -1,7 +1,9 @@
 from imp import new_module
-from onpolicy.algorithms.mad_MAPPOPolicy import MAD_MAPPOPolicy as Policy
+from torch.nn.parameter import Parameter
 from onpolicy.algorithms.graph_test_policy import GraphTestPolicy
 from onpolicy.algorithms.graph_base_ssm_policy import GraphBaseSSMPolicy
+from onpolicy.algorithms.mad_MAPPOPolicy import MAD_MAPPOPolicy
+from onpolicy.algorithms.graph_MAPPOPolicy import GR_MAPPOPolicy 
 from multiagent.custom_scenarios.navigation_graph import Scenario
 from multiagent.environment import MultiAgentGraphEnv
 import numpy as np
@@ -13,6 +15,8 @@ import os, sys
 import time
 from distutils.util import strtobool
 
+import matplotlib.pyplot as plt
+
 sys.path.append(os.path.abspath(os.getcwd()))
 
 def parse_args(args, parser):
@@ -23,7 +27,7 @@ def parse_args(args, parser):
         help="Which scenario to run on",
     )
     parser.add_argument("--num_landmarks", type=int, default=3)
-    parser.add_argument("--num_agents", type=int, default=10, help="number of players")
+    parser.add_argument("--num_agents", type=int, default=3, help="number of players")
     parser.add_argument(
         "--num_obstacles", type=int, default=3, help="Number of obstacles"
     )
@@ -85,6 +89,13 @@ all_args, parser = graph_config(args, parser)
 # create world
 world = scenario.make_world(all_args)
 
+# Set disturbance parameters if enabled
+if hasattr(all_args, 'use_disturbance') and all_args.use_disturbance:
+    world.use_disturbance = True
+    world.disturbance_std = getattr(all_args, 'disturbance_std', 0.1)
+    world.disturbance_decay_rate = getattr(all_args, 'disturbance_decay_rate', 0.1)
+    world.disturbance_type = getattr(all_args, 'disturbance_type', 'position')
+
 # create multiagent environment
 env = MultiAgentGraphEnv(world=world, reset_callback=scenario.reset_world, 
                     reward_callback=scenario.reward, 
@@ -98,15 +109,26 @@ env = MultiAgentGraphEnv(world=world, reset_callback=scenario.reset_world,
                     discrete_action=False)
 
 
-policy = GraphBaseSSMPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
+policy = MAD_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
+#policy = GR_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 
+model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy/run23/models/actor.pt"
+#model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run39/models/actor.pt"
 
-model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/gnn_ssm_base/run39/models/actor.pt"
 model_loaded = torch.load(model_path)
 
+#policy.actor.load_state_dict(model_loaded)
 
-# logger.info(f"Model loaded: {model_loaded}")
-policy.actor.load_state_dict(model_loaded)
+policy.actor.eval()
+policy.actor.under_training = False
+
+
+# Lambda_mod = torch.exp(-torch.exp(policy.actor.ssm.LRUR.nu_log))
+# Lambda_re = Lambda_mod * torch.cos(torch.exp(policy.actor.ssm.LRUR.theta_log))
+# Lambda_im = Lambda_mod * torch.sin(torch.exp(policy.actor.ssm.LRUR.theta_log))
+# Lambda = torch.complex(Lambda_re, Lambda_im).abs()  # Eigenvalues matrix
+
+# logger.info(f'Lambda: {Lambda}')
 
 # execution loop
 obs_n, agent_id_n, node_obs_n, adj_n = env.reset()
@@ -125,9 +147,10 @@ frame_time = 1.0 / target_fps
 
 num_collisions = 0
 
-episodes = 10
-epsiode_length = 200
+episodes = 1
+epsiode_length = 25
 
+magnitudes = []
 for episode in range(episodes):
     obs_n, agent_id_n, node_obs_n, adj_n = env.reset()
     env.render()
@@ -135,11 +158,12 @@ for episode in range(episodes):
         frame_start = time.time()
         act_n = []
 
+        mag_agents = []
         for i in range(env.n):
             # Each agent has its own RNN hidden state and SSM state
             with torch.no_grad():
                 # Get full action
-                action, _, rnn_states_out, ssm_states_out, y = policy.actor.forward(
+                action, _, rnn_states_out, ssm_states_out, y, magnitude = policy.actor.forward(
                     obs=obs_n[i][None, :],  # Add batch dim
                     node_obs=node_obs_n[i][None, :, :],  # Add batch dim
                     adj=adj_n[i][None, :, :],  # Add batch dim
@@ -154,10 +178,14 @@ for episode in range(episodes):
                 rnn_states[i:i+1] = rnn_states_out
                 ssm_states[i] = ssm_states_out
 
+                mag_agents.append(magnitude[0,0].item())
+
             # For continuous action space, use actions directly
             action_array = action[0].detach().cpu().numpy()  # Shape: (action_dim,)
 
             act_n.append(action_array)
+
+        magnitudes.append(mag_agents)
 
         # step environment
         obs_n, agent_id_n, node_obs_n, adj_n, reward_n, done_n, info_n = env.step(act_n)
@@ -187,3 +215,7 @@ for episode in range(episodes):
     masks = np.zeros((env.n, 1), dtype=np.float32)
     ssm_states = [None] * env.n
     num_collisions = 0
+
+fig = plt.figure()
+plt.plot(magnitudes)
+plt.show()

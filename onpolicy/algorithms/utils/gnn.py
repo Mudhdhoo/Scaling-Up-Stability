@@ -684,6 +684,7 @@ class ZeroPreservingTransformerConvNet(nn.Module):
                 embed_add_self_loop: bool,
                 max_edge_dist: float,
                 edge_dim: int = 1):
+
         super(ZeroPreservingTransformerConvNet, self).__init__()
         self.active_func = nn.ReLU() if use_ReLU else nn.Tanh()
         self.num_heads = num_heads

@@ -41,6 +41,13 @@ def MPEEnv(args: argparse.Namespace):
     scenario = load(args.scenario_name + ".py").Scenario()
     # create world
     world = scenario.make_world(args=args)
+
+    # Set disturbance parameters if enabled
+    if hasattr(args, 'use_disturbance') and args.use_disturbance:
+        world.use_disturbance = True
+        world.disturbance_std = getattr(args, 'disturbance_std', 0.1)
+        world.disturbance_decay_rate = getattr(args, 'disturbance_decay_rate', 0.1)
+        world.disturbance_type = getattr(args, 'disturbance_type', 'velocity')
     if args.algorithm_name in ["mappo", "rmappo"]:
         from multiagent.environment import MultiAgentPPOEnv as MultiAgentEnv
     else:
@@ -68,6 +75,14 @@ def GraphMPEEnv(args):
     scenario = load(args.scenario_name + ".py").Scenario()
     # create world
     world = scenario.make_world(args=args)
+
+    # Set disturbance parameters if enabled
+    if hasattr(args, 'use_disturbance') and args.use_disturbance:
+        world.use_disturbance = True
+        world.disturbance_std = getattr(args, 'disturbance_std', 0.1)
+        world.disturbance_decay_rate = getattr(args, 'disturbance_decay_rate', 0.1)
+        world.disturbance_type = getattr(args, 'disturbance_type', 'velocity')
+
     from multiagent.environment import MultiAgentGraphEnv
 
     # Determine if we should use discrete or continuous actions

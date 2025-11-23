@@ -151,6 +151,11 @@ class World(object):
         self.cache_dists = False
         self.cached_dist_vect = None
         self.cached_dist_mag = None
+        # disturbance parameters
+        self.use_disturbance = False
+        self.disturbance_std = 0.1
+        self.disturbance_decay_rate = 0.1
+        self.current_time_step = 0
 
     # return all entities in the world
     @property
@@ -193,6 +198,19 @@ class World(object):
         self.cached_dist_mag = np.linalg.norm(self.cached_dist_vect, axis=2)
 
         self.cached_collisions = self.cached_dist_mag <= self.min_dists
+
+    def generate_disturbance(self, n):
+        """Generate disturbance w_t = std * N(0,1) * exp(-decay_rate * t)
+
+        Args:
+            n: Dimension of the disturbance vector (typically dim_p=2 for 2D)
+
+        Returns:
+            Disturbance vector of shape (n,)
+        """
+        w = self.disturbance_std * np.random.randn(n)
+        w *= np.exp(-self.disturbance_decay_rate * self.current_time_step)
+        return w
 
     # get the entity given the id and type
     def get_entity(self, entity_type: str, id: int) -> Entity:
@@ -247,6 +265,11 @@ class World(object):
                 p_force[i] = (
                     agent.mass * agent.accel if agent.accel is not None else agent.mass
                 ) * agent.action.u + noise
+
+                # Apply disturbance as additive force if enabled
+                if self.use_disturbance and self.disturbance_type == "force":
+                    w = self.generate_disturbance(self.dim_p)
+                    p_force[i] = p_force[i] + w
         return p_force
 
     # gather physical forces acting on entities
@@ -283,6 +306,7 @@ class World(object):
             entity.state.p_vel = entity.state.p_vel * (1 - self.damping)
             if p_force[i] is not None:
                 entity.state.p_vel += (p_force[i] / entity.mass) * self.dt
+
             if entity.max_speed is not None:
                 speed = np.sqrt(
                     np.square(entity.state.p_vel[0]) + np.square(entity.state.p_vel[1])
@@ -297,6 +321,15 @@ class World(object):
                         * entity.max_speed
                     )
             entity.state.p_pos += entity.state.p_vel * self.dt
+
+            # Check if this entity is an agent (disturbance only applies to agents)
+            is_agent = entity in self.agents
+            
+            # Apply disturbance to position if enabled (agents only)
+            if self.use_disturbance and is_agent:
+                w = self.generate_disturbance(2*self.dim_p)
+                entity.state.p_pos += w[:self.dim_p]
+                entity.state.p_vel += w[self.dim_p:]
 
     def update_agent_state(self, agent: Agent):
         # set communication state (directly for now)

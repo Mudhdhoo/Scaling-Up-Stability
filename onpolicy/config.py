@@ -552,7 +552,7 @@ def get_config():
     parser.add_argument(
         "--log_interval",
         type=int,
-        default=5,
+        default=1,
         help="time duration between contiunous twice log printing.",
     )
 
@@ -773,6 +773,56 @@ def graph_config(args, parser):
     )
 
     parser.add_argument(
+        "m_schedule_type",
+        type=str,
+        default="step",
+        choices=["linear", "step", "none"],
+        help="Type of magnitude schedule: 'linear' for linear warmup, 'step' for step change at specified episode",
+    )
+
+    parser.add_argument(
+        "--m_max_start",
+        type=float,
+        default=0.5,
+        help="Starting value for magnitude annealing in the MAD policy",
+    )
+
+    parser.add_argument(
+        "--m_max_final",
+        type=float,
+        default=5.0,
+        help="Final value for magnitude annealing in the MAD policy",
+    )
+
+    parser.add_argument(
+        "--m_max_warmup_episodes",
+        type=int,
+        default=250,
+        help="Number of episodes to linearly warm up m_max from start to final (0 = disabled)",
+    )
+
+    parser.add_argument(
+        "--m_max_step_episode",
+        type=int,
+        default=100,
+        help="Episode at which to step m_max from start to final (0 = disabled). Takes precedence over warmup.",
+    )
+
+    parser.add_argument(
+        "--rmin",
+        type=float,
+        default=0.85,
+        help="Minimum value for the randomization in the LRU",
+    )
+
+    parser.add_argument(
+        "--rmax",
+        type=float,
+        default=0.9,
+        help="Maximum value for the randomization in the LRU",
+    )
+
+    parser.add_argument(
         "--use_mad_policy",
         action="store_true",
         default=False,
@@ -808,6 +858,27 @@ def graph_config(args, parser):
         type=int,
         default=64,
         help="Hidden dimension for MLP in SSM (State Space Model) in MAD policy magnitude term",
+    )
+
+    # Disturbance parameters
+    parser.add_argument(
+        "--use_disturbance",
+        action="store_true",
+        default=False,
+        help="Whether to add disturbance to the system states during rollout. "
+        "Disturbance follows w_t = std * N(0,1) * exp(-decay_rate * t)",
+    )
+    parser.add_argument(
+        "--disturbance_std",
+        type=float,
+        default=0.1,
+        help="Standard deviation for the disturbance process",
+    )
+    parser.add_argument(
+        "--disturbance_decay_rate",
+        type=float,
+        default=0.1,
+        help="Exponential decay rate for the disturbance over time",
     )
 
     all_args = parser.parse_known_args(args)[0]

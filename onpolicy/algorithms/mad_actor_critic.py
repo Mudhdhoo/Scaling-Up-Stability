@@ -1,7 +1,3 @@
-"""
-MAD (Magnitude And Direction) Actor-Critic implementation.
-Implements the MAD policy parameterization from Furieri et al. (2025).
-"""
 import argparse
 from typing import Tuple
 
@@ -10,13 +6,14 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 from onpolicy.algorithms.utils.util import init, check
-from onpolicy.algorithms.utils.gnn import GNNBase, ZeroPreservingGNNBase
+from onpolicy.algorithms.utils.gnn import GNNBase
 from onpolicy.algorithms.utils.mlp import MLPBase
 from onpolicy.algorithms.utils.rnn import RNNLayer
 from onpolicy.algorithms.utils.act import ACTLayer
-from onpolicy.algorithms.utils.ssm import SSM
 from onpolicy.algorithms.utils.popart import PopArt
 from onpolicy.utils.util import get_shape_from_obs_space
+from onpolicy.algorithms.utils.ssm import SSM
+from onpolicy.algorithms.utils.gnn import ZeroPreservingGNNBase
 from loguru import logger
 import time
 
@@ -36,20 +33,33 @@ def minibatchGenerator(
         )
 
 
-class MAD_GR_Actor(nn.Module):
+class MAD_Actor(nn.Module):
     """
-    MAD Graph-based Actor for distributed multi-agent control.
+    Actor network with SSM and proportional base controller for MAPPO.
+    Outputs actions as: u = u_base + |M(x0)| * u_gnn
+    where u_base = K_p * (goal - pos) is a proportional controller
+    and u_gnn is learned from GNN features.
 
-    Implements the policy: a_t = u_base + |M_t(w_t)| * D_t(x_t)
+    IMPORTANT: Requires CONTINUOUS action space (Box).
+    Set discrete_action=False in training config.
 
-    where:
-        - u_base: Proportional base controller K_p * (goal - current_pos)
-        - M_t: Magnitude term using GNN + SSM on global state disturbances w_t (L_p-stable)
-        - D_t: Direction term using GNN + (optional RNN) on neighbor observations x_t
-        - w_t = global_states at t=0 (episode reset), else 0
-        - global_states: [vel_x, vel_y, pos_x, pos_y] in global frame (no auxiliary info)
-        - |M_t| ensures positive magnitude
-        - D_t is normalized via tanh: |D_t| <= 1
+    args: argparse.Namespace
+        Arguments containing relevant model information.
+    obs_space: (gym.Space)
+        Observation space.
+    node_obs_space: (gym.Space)
+        Node observation space
+    edge_obs_space: (gym.Space)
+        Edge dimension in graphs
+    action_space: (gym.Space)
+        Action space (must be Box/continuous).
+    device: (torch.device)
+        Specifies the device to run on (cpu/gpu).
+    split_batch: (bool)
+        Whether to split a big-batch into multiple
+        smaller ones to speed up forward pass.
+    max_batch_size: (int)
+        Maximum batch size to use.
     """
 
     def __init__(
@@ -63,7 +73,7 @@ class MAD_GR_Actor(nn.Module):
         split_batch: bool = False,
         max_batch_size: int = 32,
     ) -> None:
-        super(MAD_GR_Actor, self).__init__()
+        super(MAD_Actor, self).__init__()
         self.args = args
         self.hidden_size = args.hidden_size
 
@@ -78,31 +88,19 @@ class MAD_GR_Actor(nn.Module):
         self.tpdv = dict(dtype=torch.float32, device=device)
         self.K_p = args.kp_val
 
+        self.m_max = args.m_max
+
         obs_shape = get_shape_from_obs_space(obs_space)
-        node_obs_shape = get_shape_from_obs_space(node_obs_space)[1]
-        edge_dim = get_shape_from_obs_space(edge_obs_space)[0]
+        node_obs_shape = get_shape_from_obs_space(node_obs_space)[
+            1
+        ]  # returns (num_nodes, num_node_feats)
+        edge_dim = get_shape_from_obs_space(edge_obs_space)[0]  # returns (edge_dim,)
 
-        # Get action dimension
-        if action_space.__class__.__name__ == "Box":
-            self.action_dim = action_space.shape[0]
-        else:
-            raise NotImplementedError("MAD_GR policy currently only supports Box action spaces")
+        self.gnn_base = GNNBase(args, node_obs_shape, edge_dim, args.actor_graph_aggr)
+        gnn_out_dim = self.gnn_base.out_dim  # output shape from gnns
+        mlp_base_in_dim = gnn_out_dim + obs_shape[0]
+        self.base = MLPBase(args, obs_shape=None, override_obs_dim=mlp_base_in_dim)
 
-        # State dimensions for magnitude term (exclude auxiliary info like goals)
-        # Typically: [vel_x, vel_y, pos_x, pos_y] = 4 dimensions for 2D particle systems
-        self.system_state_dim = getattr(args, 'system_state_dim', 4)
-
-        # ---------------- Direction Modules ----------------
-
-        # GNN for direction term - processes neighbor observations x_t
-        self.direction_gnn = GNNBase(args, node_obs_shape, edge_dim, args.actor_graph_aggr)
-        direction_gnn_out_dim = self.direction_gnn.out_dim
-
-        # MLP for direction term
-        direction_mlp_in_dim = direction_gnn_out_dim + obs_shape[0]
-        self.direction_mlp = MLPBase(args, obs_shape=None, override_obs_dim=direction_mlp_in_dim)
-
-        # Optional RNN for direction term
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             self.rnn = RNNLayer(
                 self.hidden_size,
@@ -115,30 +113,26 @@ class MAD_GR_Actor(nn.Module):
             action_space, self.hidden_size, self._use_orthogonal, self._gain
         )
 
-        # ---------------- Magnitude Modules ----------------
+        # Zero-preserving GNN for magnitude pathway (preserves L_p-stability)
+        # This processes neighbor observations and feeds to SSM
+        self.mag_gnn = ZeroPreservingGNNBase(
+            args, node_obs_shape, edge_dim, args.actor_graph_aggr
+        )
+        mag_gnn_out_dim = self.mag_gnn.out_dim
 
-        # GNN for magnitude term - processes disturbance observations w_t (state-only)
-        # Input: only dynamical system states (position, velocity), no auxiliary info (goals)
-        # Uses ZeroPreservingGNNBase to ensure f(0)=0 for L_p-stability
-        self.magnitude_gnn = ZeroPreservingGNNBase(args, self.system_state_dim, edge_dim, args.actor_graph_aggr)
-        mag_gnn_out_dim = self.magnitude_gnn.out_dim
-
-        # MLP for magnitude term (no concatenation with obs to maintain state-only pathway)
-        # Use bias=False, use_layer_norm=False, use_feature_norm=False to ensure zero-preservation
-        magnitude_mlp_in_dim = mag_gnn_out_dim
-        self.magnitude_mlp = MLPBase(args, obs_shape=None, bias=False, use_layer_norm=False,
-                                     use_feature_norm=False, override_obs_dim=magnitude_mlp_in_dim)
-
-        # SSM for magnitude term (L_p-stable temporal processing)
         ssm_state_features = getattr(args, 'ssm_hidden_dim', 64)
         ssm_mlp_hidden = getattr(args, 'ssm_mlp_hidden', 64)
 
+        # SSM now receives GNN output instead of just rel_goal
         self.ssm = SSM(
-            in_features=self.hidden_size,
-            out_features=1,
+            input_size=mag_gnn_out_dim,  # GNN output dimension
+            output_size=1,
+            lru_output_size=self.hidden_size,
             state_features=ssm_state_features,
-            scan=False,  # Use step-by-step for online execution
+            scan=False,
             mlp_hidden_size=ssm_mlp_hidden,
+            rmin=args.rmin,
+            rmax=args.rmax,
         )
 
         self.to(device)
@@ -154,34 +148,43 @@ class MAD_GR_Actor(nn.Module):
         masks,
         available_actions=None,
         deterministic=False,
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor, Tensor]:
         """
-        Compute actions using MAD decomposition: a = u_base + |M(w)| * D(x)
+        Compute actions from the given inputs.
+        obs: (np.ndarray / torch.Tensor)
+            Observation inputs into network.
+        node_obs (np.ndarray / torch.Tensor):
+            Local agent graph node features to the actor.
+        adj (np.ndarray / torch.Tensor):
+            Adjacency matrix for the graph
+        agent_id (np.ndarray / torch.Tensor)
+            The agent id to which the observation belongs to
+        rnn_states: (np.ndarray / torch.Tensor)
+            If RNN network, hidden states for RNN.
+        masks: (np.ndarray / torch.Tensor)
+            Mask tensor denoting if hidden states
+            should be reinitialized to zeros.
+        available_actions: (np.ndarray / torch.Tensor)
+            Denotes which actions are available to agent
+            (if None, all actions available)
+        deterministic: (bool)
+            Whether to sample from action distribution or return the mode.
 
-        Args:
-            obs: Agent observations [batch, obs_dim]
-            node_obs: Neighbor observations (x_t) [batch, num_nodes, node_dim]
-            adj: Adjacency matrix [batch, num_nodes, num_nodes]
-            agent_id: Agent IDs [batch]
-            rnn_states: RNN hidden states [batch, hidden_dim]
-            ssm_states: SSM hidden states [batch, state_features] (complex)
-            masks: Episode masks [batch, 1] (0 = reset)
-            available_actions: Unused for continuous actions
-            deterministic: Whether to sample or use mean
-
-        Returns:
-            actions: Output actions [batch, action_dim]
-            action_log_probs: Log probabilities [batch, 1]
-            rnn_states: Updated RNN states [batch, hidden_dim]
-            ssm_states: Updated SSM hidden states [batch, state_features] (complex)
+        :return actions: (torch.Tensor)
+            Actions to take.
+        :return action_log_probs: (torch.Tensor)
+            Log probabilities of taken actions.
+        :return rnn_states: (torch.Tensor)
+            Updated RNN hidden states.
         """
-        # Convert inputs to proper format
         obs = check(obs).to(**self.tpdv)
         node_obs = check(node_obs).to(**self.tpdv)
         adj = check(adj).to(**self.tpdv)
         agent_id = check(agent_id).to(**self.tpdv).long()
         rnn_states = check(rnn_states).to(**self.tpdv)
         masks = check(masks).to(**self.tpdv)
+        if available_actions is not None:
+            available_actions = check(available_actions).to(**self.tpdv)
 
         batch_size = obs.shape[0]
 
@@ -205,81 +208,84 @@ class MAD_GR_Actor(nn.Module):
                     torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
                 )
 
-        # ==================== Magnitude Term M_t ====================
+        # ==================== Magnitude GNN → SSM Pipeline (Kickstart) ====================
+        # Process neighbor observations through zero-preserving GNN
+        # This preserves L_p-stability: f(0) = 0
+        mag_gnn_out = self.mag_gnn(node_obs, adj, agent_id)  # (batch_size, mag_gnn_out_dim)
 
-        states_obs = node_obs[:, :, :self.system_state_dim]
-
-        # Prepare disturbance observations: w_t = state_obs_global at t=0 (reset), else 0
-        w_t_states = torch.where(
-            reset_mask.unsqueeze(-1).unsqueeze(-1).expand_as(states_obs),
-            states_obs,  # w_0 = states at reset
-            torch.zeros_like(states_obs)  # w_t = 0 otherwise
+        # SSM input: GNN output at t=0 (reset), zeros otherwise
+        # This "kickstarts" the SSM with aggregated neighbor information at episode start
+        ssm_input = torch.where(
+            reset_mask.unsqueeze(-1).expand_as(mag_gnn_out),
+            mag_gnn_out,  # At reset: use GNN-processed neighbor observations
+            torch.zeros_like(mag_gnn_out)  # Otherwise: zero input
         )
 
-        # Process through GNN with optional batch splitting
-        # NOTE: ZeroPreservingGNN ignores edge attributes to maintain f(0)=0 property
-        if self.split_batch and (obs.shape[0] > self.max_batch_size):
-            batchGenerator = minibatchGenerator(obs, w_t_states, adj, agent_id, self.max_batch_size)
-            magnitude_features_list = []
-            for batch in batchGenerator:
-                obs_batch, w_t_batch, adj_batch, agent_id_batch = batch
-                mag_nbd_batch = self.magnitude_gnn(w_t_batch, adj_batch, agent_id_batch)
-                mag_feat_batch = self.magnitude_mlp(mag_nbd_batch)
-                magnitude_features_list.append(mag_feat_batch)
-            magnitude_features = torch.cat(magnitude_features_list, dim=0)
-        else:
-            magnitude_features = self.magnitude_gnn(w_t_states, adj, agent_id)
-            magnitude_features = self.magnitude_mlp(magnitude_features)
-
-        # Pass through SSM (L_p-stable temporal processing)
-        magnitude, ssm_states = self.ssm.step(magnitude_features, ssm_states)
-        magnitude = torch.abs(magnitude)
-
-        # ==================== Direction Term D_t ====================
-        # Process through GNN with optional batch splitting
-        if self.split_batch and (obs.shape[0] > self.max_batch_size):
-            batchGenerator = minibatchGenerator(obs, node_obs, adj, agent_id, self.max_batch_size)
-            direction_features_list = []
+        # if batch size is big, split into smaller batches, forward pass and then concatenate
+        if (self.split_batch) and (obs.shape[0] > self.max_batch_size):
+            # print(f'Actor obs: {obs.shape[0]}')
+            batchGenerator = minibatchGenerator(
+                obs, node_obs, adj, agent_id, self.max_batch_size
+            )
+            actor_features = []
             for batch in batchGenerator:
                 obs_batch, node_obs_batch, adj_batch, agent_id_batch = batch
-                dir_nbd_batch = self.direction_gnn(node_obs_batch, adj_batch, agent_id_batch)
-                dir_feat_batch = torch.cat([obs_batch, dir_nbd_batch], dim=1)
-                dir_feat_batch = self.direction_mlp(dir_feat_batch)
-                direction_features_list.append(dir_feat_batch)
-            direction_features = torch.cat(direction_features_list, dim=0)
+                nbd_feats_batch = self.gnn_base(
+                    node_obs_batch, adj_batch, agent_id_batch
+                )
+                act_feats_batch = torch.cat([obs_batch, nbd_feats_batch], dim=1)
+                actor_feats_batch = self.base(act_feats_batch)
+                actor_features.append(actor_feats_batch)
+            actor_features = torch.cat(actor_features, dim=0)
         else:
-            direction_nbd_features = self.direction_gnn(node_obs, adj, agent_id)
-            direction_features = torch.cat([obs, direction_nbd_features], dim=1)
-            direction_features = self.direction_mlp(direction_features)
+            nbd_features = self.gnn_base(node_obs, adj, agent_id)         # Generate node embedding for the agent
+            actor_features = torch.cat([obs, nbd_features], dim=1)        # Concatenate agent observation with node embedding
+            actor_features = self.base(actor_features)                    # Pass through actor MLP (batch size, hidden size)
 
-        # Optional RNN for temporal dependencies
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
-            direction_features, rnn_states = self.rnn(direction_features, rnn_states, masks)
+            actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
-        direction, action_log_probs = self.act(
-            direction_features, available_actions, deterministic)
+        # Sample from Gaussian distribution
+        # y is the raw Gaussian sample, y_log_probs is log p(y)
+        y, y_log_probs = self.act(
+            actor_features, available_actions, deterministic
+        )
 
-        direction = torch.tanh(direction)
-
-        # ==================== Combine: |M_t| * D_t ====================
-        u_mad = magnitude * direction
-       # u_mad = direction
-
-        # ==================== Base Controller ====================
+        # Direction term: apply tanh to ensure |u_gnn| ≤ 1
+        u_gnn = torch.tanh(y)
 
         # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
-        # NOTE: goal position is already RELATIVE to current position in the observation
-        # rel_goal = goal - current_pos (computed in navigation_graph.py:407)
-        rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y]
+        rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
+        u_base = self.K_p * rel_goal  # Broadcasting K_p
 
-        # Proportional controller: u_base = K_p * rel_goal
-        # Since rel_goal is already the error (goal - current), we use it directly
-        u_base = self.K_p * rel_goal  # Broadcasting K_
+        # Pass SSM input through the state space model (online step-by-step execution)
+        # SSM outputs magnitude term M_t = SSM(GNN(neighbors_at_t0))
+        ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
 
-        # Total action: base controller + MAD policy
-        actions = u_base + u_mad
+        # Take absolute value and clamp to prevent extreme Jacobian values
+        # Clamping to [0.01, 10.0] prevents log(magnitude) from being too negative or too positive
+        #magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max if self.training else self.m_max_final)
+        magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max)
+       # logger.info(f'magnitude: {magnitude}')
 
-        return actions, action_log_probs, rnn_states, ssm_states
+        # action = u_base + |M| * tanh(y)
+        actions = u_base + magnitude * u_gnn
+       # actions = u_gnn
+
+        # Jacobian correction for the transformation: action = u_base + M * tanh(y)
+        # log p(action) = log p(y) - log|det(J)|
+        # J = d(action)/dy = M * diag(1 - tanh(y)^2)
+        # log|det(J)| = sum(log|M|) + sum(log(1 - tanh(y)^2))
+        action_dim = u_gnn.shape[-1]
+        log_jac_tanh = torch.log(1 - u_gnn.pow(2) + 1e-8).sum(-1, keepdim=True)
+        log_jac_M = torch.log(magnitude + 1e-8).sum(-1, keepdim=True) * action_dim
+
+        action_log_probs = y_log_probs - log_jac_M - log_jac_tanh
+
+        if self.under_training:
+            return (actions, action_log_probs, rnn_states, ssm_states, y)
+        else:
+            return (actions, action_log_probs, rnn_states, ssm_states, y, magnitude)
 
     def evaluate_actions(
         self,
@@ -293,161 +299,205 @@ class MAD_GR_Actor(nn.Module):
         masks,
         available_actions=None,
         active_masks=None,
+        pre_tanh_value=None,  # Not used - kept for API compatibility
     ) -> Tuple[Tensor, Tensor]:
         """
-        Evaluate log probability and entropy of given actions.
+        Compute log probability and entropy of given actions.
 
-        Reconstructs the magnitude and direction terms to compute proper log probabilities
-        for PPO training. Accounts for the base controller and MAD transformation.
+        IMPORTANT: This method recovers y from the stored action using the current
+        magnitude M_new. This is critical for correct PPO importance sampling when
+        the magnitude changes between collection and evaluation.
 
-        Args:
-            obs: Agent observations [batch, obs_dim]
-            node_obs: Neighbor observations [batch, num_nodes, node_dim]
-            adj: Adjacency matrix [batch, num_nodes, num_nodes]
-            agent_id: Agent IDs [batch]
-            rnn_states: RNN hidden states [batch, hidden_dim]
-            ssm_states: SSM hidden states from buffer [batch, state_features] (complex)
-            action: Actions to evaluate [batch, action_dim] (includes base controller)
-            masks: Episode masks [batch, 1]
-            available_actions: Unused for continuous actions
-            active_masks: Active agent masks [batch, 1]
+        obs: (torch.Tensor)
+            Observation inputs into network.
+        node_obs (torch.Tensor):
+            Local agent graph node features to the actor.
+        adj (torch.Tensor):
+            Adjacency matrix for the graph.
+        agent_id (np.ndarray / torch.Tensor)
+            The agent id to which the observation belongs to
+        action: (torch.Tensor)
+            Total actions (u_base + M*tanh(y)) stored in buffer.
+        rnn_states: (torch.Tensor)
+            If RNN network, hidden states for RNN.
+        ssm_states: (torch.Tensor)
+            SSM hidden states for this timestep.
+        masks: (torch.Tensor)
+            Mask tensor denoting if hidden states
+            should be reinitialized to zeros.
+        available_actions: (torch.Tensor)
+            Denotes which actions are available to agent
+            (if None, all actions available)
+        active_masks: (torch.Tensor)
+            Denotes whether an agent is active or dead.
+        pre_tanh_value: (torch.Tensor)
+            Not used - kept for API compatibility.
 
-        Returns:
-            action_log_probs: Log probabilities of actions [batch, 1]
-            dist_entropy: Entropy of direction distribution (scalar)
+        :return action_log_probs: (torch.Tensor)
+            Log probabilities under current policy.
+        :return dist_entropy: (torch.Tensor)
+            Action distribution entropy for the given inputs.
         """
-        # Convert inputs
         obs = check(obs).to(**self.tpdv)
         node_obs = check(node_obs).to(**self.tpdv)
         adj = check(adj).to(**self.tpdv)
-        agent_id = check(agent_id).to(**self.tpdv).long()
+        agent_id = check(agent_id).to(**self.tpdv)
         rnn_states = check(rnn_states).to(**self.tpdv)
         action = check(action).to(**self.tpdv)
         masks = check(masks).to(**self.tpdv)
+        if available_actions is not None:
+            available_actions = check(available_actions).to(**self.tpdv)
 
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
 
+        # Note: pre_tanh_value is not used - we recover y from action for correct importance sampling
+
         batch_size = obs.shape[0]
 
-        # ==================== Recompute Direction Term ====================
-        if self.split_batch and (obs.shape[0] > self.max_batch_size):
-            batchGenerator = minibatchGenerator(obs, node_obs, adj, agent_id, self.max_batch_size)
-            direction_features_list = []
-            for batch in batchGenerator:
-                obs_batch, node_obs_batch, adj_batch, agent_id_batch = batch
-                dir_nbd_batch = self.direction_gnn(node_obs_batch, adj_batch, agent_id_batch)
-                dir_feat_batch = torch.cat([obs_batch, dir_nbd_batch], dim=1)
-                dir_feat_batch = self.direction_mlp(dir_feat_batch)
-                direction_features_list.append(dir_feat_batch)
-            direction_features = torch.cat(direction_features_list, dim=0)
-        else:
-            direction_nbd_features = self.direction_gnn(node_obs, adj, agent_id)
-            direction_features = torch.cat([obs, direction_nbd_features], dim=1)
-            direction_features = self.direction_mlp(direction_features)
+        # Detect episode resets (mask == 0)
+        reset_mask = (masks.squeeze(-1) == 0)
+        reset_indices = reset_mask.nonzero(as_tuple=True)[0]
 
-        if self._use_naive_recurrent_policy or self._use_recurrent_policy:
-            direction_features, rnn_states = self.rnn(direction_features, rnn_states, masks)
-
-        # Get direction distribution from ACTLayer
-        #direction_dist = self.act.action_out(direction_features)
-
-        # Compute entropy
-        # dist_entropy = direction_dist.entropy()
-        # if active_masks is not None:
-        #     dist_entropy = (dist_entropy * active_masks.squeeze(-1)).sum() / active_masks.sum()
-        # else:
-        #     dist_entropy = dist_entropy.mean()
-
-        # ==================== Recompute Magnitude Term ====================
-        # Use stored SSM hidden states from buffer
-        if ssm_states is not None:
-            ssm_states = check(ssm_states).to(**self.tpdv)
-        else:
-            # Fallback: initialize to zeros (shouldn't happen during training)
+        # Initialize or reset SSM hidden states if needed
+        if ssm_states is None:
+            # Initialize for all environments (states not in buffer)
             ssm_states = torch.complex(
                 torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
                 torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
             )
-
-        # Detect first steps
-        reset_mask = (masks.squeeze(-1) == 0)
-
-        # Extract neighboring states from node observations (same as forward method)
-        states_obs = node_obs[:, :, :self.system_state_dim]
-
-        # Prepare disturbance observations: w_t = neighboring states at t=0 (reset), else 0
-        w_t_states = torch.where(
-            reset_mask.unsqueeze(-1).unsqueeze(-1).expand_as(states_obs),
-            states_obs,  # w_0 = states at reset
-            torch.zeros_like(states_obs)  # w_t = 0 otherwise
-        )
-
-        # Recompute magnitude with gradients enabled
-        # NOTE: ZeroPreservingGNN ignores edge attributes to maintain f(0)=0 property
-        if self.split_batch and (obs.shape[0] > self.max_batch_size):
-            batchGenerator = minibatchGenerator(obs, w_t_states, adj, agent_id, self.max_batch_size)
-            magnitude_features_list = []
-            for batch in batchGenerator:
-                obs_batch, w_t_batch, adj_batch, agent_id_batch = batch
-                mag_nbd_batch = self.magnitude_gnn(w_t_batch, adj_batch, agent_id_batch)
-                mag_feat_batch = self.magnitude_mlp(mag_nbd_batch)
-                magnitude_features_list.append(mag_feat_batch)
-            magnitude_features = torch.cat(magnitude_features_list, dim=0)
         else:
-            magnitude_features = self.magnitude_gnn(w_t_states, adj, agent_id)
-            magnitude_features = self.magnitude_mlp(magnitude_features)
+            # SSM states exist, convert from buffer format if needed
+            # Buffer stores as numpy [batch, state_dim, 2] with [real, imag] components
+            import numpy as np
+            if isinstance(ssm_states, np.ndarray):
+                # Convert from numpy to torch.complex
+                ssm_states = check(ssm_states).to(**self.tpdv)
+                ssm_states = torch.complex(ssm_states[..., 0], ssm_states[..., 1])
+            elif not torch.is_complex(ssm_states):
+                # Already torch tensor but not complex, convert
+                ssm_states = ssm_states.to(**self.tpdv)
+                ssm_states = torch.complex(ssm_states[..., 0], ssm_states[..., 1])
 
-        magnitude, ssm_states = self.ssm.step(magnitude_features, ssm_states)
-        magnitude = torch.abs(magnitude)
+            # Check size and reset if needed
+            if ssm_states.shape[0] != batch_size:
+                ssm_states = torch.complex(
+                    torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
+                    torch.zeros(batch_size, self.ssm.LRUR.state_features, device=obs.device),
+                )
 
-        # ==================== Compute Base Controller ====================
-        # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
-        # NOTE: goal position is already RELATIVE to current position
-        rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
-        u_base = self.K_p * rel_goal
+        # Reset specific indices if episodes ended
+        if len(reset_indices) > 0:
+            # Reset only environments that are resetting
+            ssm_states = ssm_states.clone()  # Clone to avoid in-place modification
+            for idx in reset_indices:
+                ssm_states[idx] = torch.complex(
+                    torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
+                    torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
+                )
 
-        # ==================== Invert MAD Transformation ====================
-        # action = u_base + magnitude * tanh(direction_sample)
-        # Solve for direction_sample
+        # ==================== Magnitude GNN → SSM Pipeline (Kickstart) ====================
+        # Process neighbor observations through zero-preserving GNN
+        # This preserves L_p-stability: f(0) = 0
+        mag_gnn_out = self.mag_gnn(node_obs, adj, agent_id)  # (batch_size, mag_gnn_out_dim)
 
-        # Remove base controller to get MAD component
-        u_mad = action - u_base
-
-        # Get direction after tanh
-        direction_inferred = u_mad / (magnitude + 1e-8)
-        direction_inferred = torch.clamp(direction_inferred, -0.999, 0.999)
-
-        # Inverse tanh: arctanh(y) = 0.5 * log((1+y)/(1-y))
-        direction_sample_inferred = 0.5 * torch.log(
-            (1 + direction_inferred + 1e-8) / (1 - direction_inferred + 1e-8)
+        # SSM input: GNN output at t=0 (reset), zeros otherwise
+        # This "kickstarts" the SSM with aggregated neighbor information at episode start
+        ssm_input = torch.where(
+            reset_mask.unsqueeze(-1).expand_as(mag_gnn_out),
+            mag_gnn_out,  # At reset: use GNN-processed neighbor observations
+            torch.zeros_like(mag_gnn_out)  # Otherwise: zero input
         )
 
-        action_log_probs, dist_entropy = self.act.evaluate_actions(
-            direction_features,
-            direction_sample_inferred,
+        # Extract relative goal for base controller
+        # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
+        rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
+        u_base = self.K_p * rel_goal  # Broadcasting K_p
+
+        ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
+
+        # magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max if self.training else self.m_max_final)
+        magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max)
+
+        # CRITICAL: Must recover y from stored action using NEW magnitude for correct PPO importance sampling
+        # The stored action was: action = u_base + M_old * tanh(y_old)
+        # Under the new policy with M_new, the corresponding y is:
+        # y_new = atanh((action - u_base) / M_new)
+        # Using stored y_old would compute probability at wrong action point!
+        u_gnn_tanh = torch.clamp((action - u_base) / (magnitude + 1e-8), -0.999, 0.999)
+        y = torch.atanh(u_gnn_tanh)
+
+        # if batch size is big, split into smaller batches, forward pass and then concatenate
+        if (self.split_batch) and (obs.shape[0] > self.max_batch_size):
+            # print(f'eval Actor obs: {obs.shape[0]}')
+            batchGenerator = minibatchGenerator(
+                obs, node_obs, adj, agent_id, self.max_batch_size
+            )
+            actor_features = []
+            for batch in batchGenerator:
+                obs_batch, node_obs_batch, adj_batch, agent_id_batch = batch
+                nbd_feats_batch = self.gnn_base(
+                    node_obs_batch, adj_batch, agent_id_batch
+                )
+                act_feats_batch = torch.cat([obs_batch, nbd_feats_batch], dim=1)
+                actor_feats_batch = self.base(act_feats_batch)
+                actor_features.append(actor_feats_batch)
+            actor_features = torch.cat(actor_features, dim=0)
+        else:
+            nbd_features = self.gnn_base(node_obs, adj, agent_id)
+            actor_features = torch.cat([obs, nbd_features], dim=1)
+            actor_features = self.base(actor_features)
+
+        if self._use_naive_recurrent_policy or self._use_recurrent_policy:
+            actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
+
+        # Evaluate log probs of the Gaussian sample y under current policy
+        # IMPORTANT: Detach y to prevent double gradient through magnitude
+        # Gradients to magnitude should only flow through the Jacobian correction terms
+        y_log_probs, dist_entropy_y = self.act.evaluate_actions(
+            actor_features,
+            y.detach(),  # Detach to prevent conflicting gradients through y recovery
             available_actions,
             active_masks=active_masks if self._use_policy_active_masks else None,
         )
 
-        # Compute log probability of the inferred direction sample
-        # direction_log_prob = direction_dist.log_probs(direction_sample_inferred)
+        action_dim = u_gnn_tanh.shape[-1]
 
-        # # Tanh correction: log|d(tanh(x))/dx| = log(1 - tanh^2(x))
-        # tanh_correction = torch.log(1 - direction_inferred**2 + 1e-8).sum(-1, keepdim=True)
+        # Jacobian correction for the transformation: action = u_base + M * tanh(y)
+        # Gradients to SSM flow through log_jac_M term
+        log_jac_tanh = torch.log(1 - u_gnn_tanh.pow(2) + 1e-8).sum(-1, keepdim=True)
+        log_jac_M = torch.log(magnitude + 1e-8).sum(-1, keepdim=True) * action_dim
 
-        # # Full Jacobian correction: includes magnitude scaling + tanh transformation
-        # # log|det(J)| = n*log(magnitude) + sum_i log(1 - tanh^2(x_i))
-        # magnitude_correction = self.action_dim * torch.log(magnitude + 1e-8)
-        # action_log_probs = direction_log_prob - magnitude_correction - tanh_correction
+        action_log_probs = y_log_probs - log_jac_M - log_jac_tanh
 
-        return action_log_probs, dist_entropy
+        # Correct entropy for the transformed distribution: H(action) = H(y) + E[log|det(J)|]
+        # The Jacobian terms contribute positively to entropy (larger M = more spread = higher entropy)
+        # This balances the -log|M| penalty in log_prob, preventing magnitude collapse
+        log_det_jacobian = log_jac_M + log_jac_tanh
+        dist_entropy = dist_entropy_y + log_det_jacobian.mean()
+
+        return (action_log_probs, dist_entropy)
 
 
-class MAD_GR_Critic(nn.Module):
+class MAD_Critic(nn.Module):
     """
-    Critic network for MAD policy.
-    Reuses the standard Graph Critic from the existing implementation.
+    Critic network class for MAPPO. Outputs value function predictions
+    given centralized input (MAPPO) or local observations (IPPO).
+    args: (argparse.Namespace)
+        Arguments containing relevant model information.
+    cent_obs_space: (gym.Space)
+        (centralized) observation space.
+    node_obs_space: (gym.Space)
+        node observation space.
+    edge_obs_space: (gym.Space)
+        edge observation space.
+    device: (torch.device)
+        Specifies the device to run on (cpu/gpu).
+    split_batch: (bool)
+        Whether to split a big-batch into multiple
+        smaller ones to speed up forward pass.
+    max_batch_size: (int)
+        Maximum batch size to use.
     """
 
     def __init__(
@@ -460,7 +510,7 @@ class MAD_GR_Critic(nn.Module):
         split_batch: bool = False,
         max_batch_size: int = 32,
     ) -> None:
-        super(MAD_GR_Critic, self).__init__()
+        super(MAD_Critic, self).__init__()
         self.args = args
         self.hidden_size = args.hidden_size
         self._use_orthogonal = args.use_orthogonal
@@ -476,20 +526,23 @@ class MAD_GR_Critic(nn.Module):
         ]
 
         cent_obs_shape = get_shape_from_obs_space(cent_obs_space)
-        node_obs_shape = get_shape_from_obs_space(node_obs_space)[1]
-        edge_dim = get_shape_from_obs_space(edge_obs_space)[0]
+        node_obs_shape = get_shape_from_obs_space(node_obs_space)[
+            1
+        ]  # (num_nodes, num_node_feats)
+        edge_dim = get_shape_from_obs_space(edge_obs_space)[0]  # (edge_dim,)
 
+        # TODO modify output of GNN to be some kind of global aggregation
         self.gnn_base = GNNBase(args, node_obs_shape, edge_dim, args.critic_graph_aggr)
         gnn_out_dim = self.gnn_base.out_dim
-
+        # if node aggregation, then concatenate aggregated node features for all agents
+        # otherwise, the aggregation is done for the whole graph
         if args.critic_graph_aggr == "node":
             gnn_out_dim *= args.num_agents
-
         mlp_base_in_dim = gnn_out_dim
         if self.args.use_cent_obs:
             mlp_base_in_dim += cent_obs_shape[0]
 
-        self.base = MLPBase(args, cent_obs_space, override_obs_dim=mlp_base_in_dim)
+        self.base = MLPBase(args, cent_obs_shape, override_obs_dim=mlp_base_in_dim)
 
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             self.rnn = RNNLayer(
@@ -513,7 +566,23 @@ class MAD_GR_Critic(nn.Module):
         self, cent_obs, node_obs, adj, agent_id, rnn_states, masks
     ) -> Tuple[Tensor, Tensor]:
         """
-        Compute value function predictions.
+        Compute actions from the given inputs.
+        cent_obs: (np.ndarray / torch.Tensor)
+            Observation inputs into network.
+        node_obs (np.ndarray):
+            Local agent graph node features to the actor.
+        adj (np.ndarray):
+            Adjacency matrix for the graph.
+        agent_id (np.ndarray / torch.Tensor)
+            The agent id to which the observation belongs to
+        rnn_states: (np.ndarray / torch.Tensor)
+            If RNN network, hidden states for RNN.
+        masks: (np.ndarray / torch.Tensor)
+            Mask tensor denoting if RNN states
+            should be reinitialized to zeros.
+
+        :return values: (torch.Tensor) value function predictions.
+        :return rnn_states: (torch.Tensor) updated RNN hidden states.
         """
         cent_obs = check(cent_obs).to(**self.tpdv)
         node_obs = check(node_obs).to(**self.tpdv)
@@ -522,7 +591,9 @@ class MAD_GR_Critic(nn.Module):
         rnn_states = check(rnn_states).to(**self.tpdv)
         masks = check(masks).to(**self.tpdv)
 
-        if self.split_batch and (cent_obs.shape[0] > self.max_batch_size):
+        # if batch size is big, split into smaller batches, forward pass and then concatenate
+        if (self.split_batch) and (cent_obs.shape[0] > self.max_batch_size):
+            # print(f'Cent obs: {cent_obs.shape[0]}')
             batchGenerator = minibatchGenerator(
                 cent_obs, node_obs, adj, agent_id, self.max_batch_size
             )
@@ -537,16 +608,19 @@ class MAD_GR_Critic(nn.Module):
                 critic_features.append(critic_feats_batch)
             critic_features = torch.cat(critic_features, dim=0)
         else:
-            nbd_features = self.gnn_base(node_obs, adj, agent_id)
+            nbd_features = self.gnn_base(
+                node_obs, adj, agent_id
+            )  # CHECK from where are these agent_ids coming
             if self.args.use_cent_obs:
-                critic_features = torch.cat([cent_obs, nbd_features], dim=1)
+                critic_features = torch.cat(
+                    [cent_obs, nbd_features], dim=1
+                )  # NOTE can remove concatenation with cent_obs and just use graph_feats
             else:
                 critic_features = nbd_features
-            critic_features = self.base(critic_features)
+            critic_features = self.base(critic_features)  # Cent obs here
 
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             critic_features, rnn_states = self.rnn(critic_features, rnn_states, masks)
-
         values = self.v_out(critic_features)
 
-        return values, rnn_states
+        return (values, rnn_states)

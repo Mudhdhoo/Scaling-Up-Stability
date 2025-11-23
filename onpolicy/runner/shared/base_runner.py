@@ -76,14 +76,12 @@ class Runner(object):
                 if not os.path.exists(self.save_dir):
                     os.makedirs(self.save_dir)
 
-        # Select policy based on environment and policy type
-        use_mad_policy = getattr(self.all_args, 'use_mad_policy', False)
 
         # from onpolicy.algorithms.graph_test_policy import GraphTestPolicy as Policy
         # from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
 
         if self.all_args.env_name == "GraphMPE":
-            if use_mad_policy:
+            if self.all_args.use_mad_policy:
                 logger.info("Using MAD policy")
                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
                 from onpolicy.algorithms.mad_MAPPOPolicy import MAD_MAPPOPolicy as Policy
@@ -96,6 +94,7 @@ class Runner(object):
                  from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
                  from onpolicy.algorithms.graph_base_ssm_policy import GraphBaseSSMPolicy as Policy
             else:
+                logger.info("Using InforMARL")
                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
                 from onpolicy.algorithms.graph_MAPPOPolicy import GR_MAPPOPolicy as Policy
         else:
@@ -134,7 +133,7 @@ class Runner(object):
             )
 
         # Verify zero-preservation for MAD policy
-        if use_mad_policy:
+        if self.all_args.use_mad_policy:
             biases = [name for name, param in self.policy.actor.named_parameters() if 'bias' in name and 'magnitude' in name]
             if len(biases) > 0:
                 logger.error(f"ERROR: Found {len(biases)} biases in magnitude pathway: {biases}")

@@ -18,12 +18,38 @@ def get_grad_norm(it) -> float:
     return math.sqrt(sum_grad)
 
 
-def update_linear_schedule(optimizer, epoch, total_num_epochs, initial_lr):
+def update_linear_schedule(param_groups, epoch, total_num_epochs, initial_lr):
     """Decreases the learning rate linearly"""
     lr = initial_lr - (initial_lr * (epoch / float(total_num_epochs)))
-    for param_group in optimizer.param_groups:
+    for param_group in param_groups:
         param_group["lr"] = lr
 
+def update_magnitude_schedule(param_groups, epoch, total_num_epochs, warmup_epochs, initial_lr, max_lr):
+    """
+    Magnitude learning rate schedule: warmup then decay.
+
+    - During warmup_epochs: Linearly increase LR from initial_lr to max_lr
+    - After warmup_epochs: Linearly decrease LR from max_lr to 0
+
+    Args:
+        param_groups: Optimizer parameter groups to update
+        epoch: Current epoch
+        total_num_epochs: Total number of training epochs
+        warmup_epochs: Number of epochs for warmup phase
+        initial_lr: Starting learning rate (at epoch 0)
+        max_lr: Peak learning rate (at epoch warmup_epochs)
+    """
+    if epoch < warmup_epochs:
+        # Warmup phase: linearly increase from initial_lr to max_lr
+        lr = initial_lr + (max_lr - initial_lr) * (epoch / float(warmup_epochs))
+    else:
+        # Decay phase: linearly decrease from max_lr to 0
+        decay_epochs = total_num_epochs - warmup_epochs
+        epochs_since_warmup = epoch - warmup_epochs
+        lr = max_lr * (1.0 - epochs_since_warmup / float(decay_epochs))
+
+    for param_group in param_groups:
+        param_group["lr"] = lr
 
 def huber_loss(e, d) -> float:
     a = (abs(e) <= d).float()

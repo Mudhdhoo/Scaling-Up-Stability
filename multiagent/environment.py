@@ -549,6 +549,8 @@ class MultiAgentOrigEnv(MultiAgentBaseEnv):
         self.current_step = 0
         # reset world
         self.reset_callback(self.world)
+        # reset disturbance timestep counter
+        self.world.current_time_step = 0
         # reset renderer
         self._reset_render()
         # record observations for each agent
@@ -816,6 +818,8 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
         self.current_step = 0
         # reset world
         self.reset_callback(self.world)
+        # reset disturbance timestep counter
+        self.world.current_time_step = 0
         # reset renderer
         self._reset_render()
         # record observations for each agent

@@ -219,6 +219,7 @@ class GR_MAPPOPolicy:
         available_actions=None,
         active_masks=None,
         lru_hidden_states=None,
+        pre_tanh_value=None,
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Get action logprobs / entropy and
