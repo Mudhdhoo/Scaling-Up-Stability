@@ -773,9 +773,9 @@ def graph_config(args, parser):
     )
 
     parser.add_argument(
-        "m_schedule_type",
+        "--m_schedule_type",
         type=str,
-        default="step",
+        default="none",
         choices=["linear", "step", "none"],
         help="Type of magnitude schedule: 'linear' for linear warmup, 'step' for step change at specified episode",
     )

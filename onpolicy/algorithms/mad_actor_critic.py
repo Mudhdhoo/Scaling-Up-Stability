@@ -88,7 +88,7 @@ class MAD_Actor(nn.Module):
         self.tpdv = dict(dtype=torch.float32, device=device)
         self.K_p = args.kp_val
 
-        self.m_max = args.m_max
+        self.m_max = args.m_max_start
 
         obs_shape = get_shape_from_obs_space(obs_space)
         node_obs_shape = get_shape_from_obs_space(node_obs_space)[
