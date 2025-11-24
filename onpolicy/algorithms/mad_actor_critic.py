@@ -265,7 +265,7 @@ class MAD_Actor(nn.Module):
         # Take absolute value and clamp to prevent extreme Jacobian values
         # Clamping to [0.01, 10.0] prevents log(magnitude) from being too negative or too positive
         #magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max if self.training else self.m_max_final)
-        magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max)
+        magnitude = ssm_out_raw.abs()#.clamp(min=0.0, max=self.m_max)
        # logger.info(f'magnitude: {magnitude}')
 
         # action = u_base + |M| * tanh(y)
@@ -417,7 +417,7 @@ class MAD_Actor(nn.Module):
         ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
 
         # magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max if self.training else self.m_max_final)
-        magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max)
+        magnitude = ssm_out_raw.abs()#.clamp(min=0.0, max=self.m_max)
 
         # CRITICAL: Must recover y from stored action using NEW magnitude for correct PPO importance sampling
         # The stored action was: action = u_base + M_old * tanh(y_old)
