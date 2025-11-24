@@ -119,12 +119,12 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 
 
 
-caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
+python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --project_name "informarl_base" \
 --env_name "GraphMPE" \
 --algorithm_name "rmappo" \
 --seed 0 \
---experiment_name "mad_policy_m_max=3_kp=0.1" \
+--experiment_name "y_detach" \
 --scenario_name "navigation_graph" \
 --num_agents 3 \
 --collision_rew 5 \
@@ -140,7 +140,7 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --use_wandb "False" \
 --use_mad_policy \
 --discrete_action "False" \
---kp_val 0.1 \
+--kp_val 2 \
 --rmin 0.85 \
 --rmax 0.9 \
---m_max_start 3.0 \
+--m_max_start 2

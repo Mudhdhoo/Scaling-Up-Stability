@@ -883,9 +883,9 @@ def graph_config(args, parser):
     )
 
     parser.add_argument(
-        "--detach_y",
-        action="store_false",
-        default=True,
+        "--no_detach_y",
+        action="store_true",
+        default=False,
         help="Whether to detach the magnitude term in the MAD policy",
     )
 

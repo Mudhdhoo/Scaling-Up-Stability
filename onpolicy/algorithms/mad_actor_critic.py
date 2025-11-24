@@ -456,7 +456,7 @@ class MAD_Actor(nn.Module):
         # Gradients to magnitude should only flow through the Jacobian correction terms
 
         # Detach to prevent conflicting gradients through y recovery
-        if self.args.detach_y:
+        if not self.args.no_detach_y:
             y = y.detach()
 
         y_log_probs, dist_entropy_y = self.act.evaluate_actions(
