@@ -454,9 +454,14 @@ class MAD_Actor(nn.Module):
         # Evaluate log probs of the Gaussian sample y under current policy
         # IMPORTANT: Detach y to prevent double gradient through magnitude
         # Gradients to magnitude should only flow through the Jacobian correction terms
+
+        # Detach to prevent conflicting gradients through y recovery
+        if self.args.detach_y:
+            y = y.detach()
+
         y_log_probs, dist_entropy_y = self.act.evaluate_actions(
             actor_features,
-            y.detach(),  # Detach to prevent conflicting gradients through y recovery
+            y,  
             available_actions,
             active_masks=active_masks if self._use_policy_active_masks else None,
         )

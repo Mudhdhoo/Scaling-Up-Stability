@@ -27,7 +27,7 @@ def parse_args(args, parser):
         help="Which scenario to run on",
     )
     parser.add_argument("--num_landmarks", type=int, default=3)
-    parser.add_argument("--num_agents", type=int, default=3, help="number of players")
+    parser.add_argument("--num_agents", type=int, default=10, help="number of players")
     parser.add_argument(
         "--num_obstacles", type=int, default=3, help="Number of obstacles"
     )
@@ -112,12 +112,12 @@ env = MultiAgentGraphEnv(world=world, reset_callback=scenario.reset_world,
 policy = MAD_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 #policy = GR_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 
-model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy/run23/models/actor.pt"
+model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy/run33/models/actor.pt"
 #model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run39/models/actor.pt"
 
 model_loaded = torch.load(model_path)
 
-#policy.actor.load_state_dict(model_loaded)
+policy.actor.load_state_dict(model_loaded)
 
 policy.actor.eval()
 policy.actor.under_training = False
@@ -148,7 +148,7 @@ frame_time = 1.0 / target_fps
 num_collisions = 0
 
 episodes = 1
-epsiode_length = 25
+epsiode_length = 250
 
 magnitudes = []
 for episode in range(episodes):

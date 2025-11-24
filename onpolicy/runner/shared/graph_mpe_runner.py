@@ -35,9 +35,6 @@ class GMPERunner(Runner):
 
         logger.info(f"Running {episodes} episodes")
 
-
-        self.trainer.policy.actor.m_max = self.all_args.m_max_start
-
         # Initialize m_max scheduling for MAD policy
         if self.all_args.use_mad_policy:
             if self.all_args.m_schedule_type == "step":

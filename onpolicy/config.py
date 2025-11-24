@@ -783,7 +783,7 @@ def graph_config(args, parser):
     parser.add_argument(
         "--m_max_start",
         type=float,
-        default=0.5,
+        default=1,
         help="Starting value for magnitude annealing in the MAD policy",
     )
 
@@ -868,6 +868,7 @@ def graph_config(args, parser):
         help="Whether to add disturbance to the system states during rollout. "
         "Disturbance follows w_t = std * N(0,1) * exp(-decay_rate * t)",
     )
+
     parser.add_argument(
         "--disturbance_std",
         type=float,
@@ -879,6 +880,13 @@ def graph_config(args, parser):
         type=float,
         default=0.1,
         help="Exponential decay rate for the disturbance over time",
+    )
+
+    parser.add_argument(
+        "--detach_y",
+        action="store_false",
+        default=True,
+        help="Whether to detach the magnitude term in the MAD policy",
     )
 
     all_args = parser.parse_known_args(args)[0]
