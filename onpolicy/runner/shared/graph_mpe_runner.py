@@ -66,9 +66,12 @@ class GMPERunner(Runner):
                 ) = self.collect(step)
 
                 # Obs reward and next obs
-                obs, agent_id, node_obs, adj, disturbance_n, rewards, dones, infos = self.envs.step(
-                    actions_env
-                )   
+                step_result = self.envs.step(actions_env)
+                if len(step_result) == 8:
+                    obs, agent_id, node_obs, adj, disturbance_n, rewards, dones, infos = step_result
+                else:
+                    obs, agent_id, node_obs, adj, rewards, dones, infos = step_result
+                    disturbance_n = None   
 
                 #logger.info(f"Obs shape: {obs.shape}, Agent ID shape: {agent_id.shape}, Node Obs shape: {node_obs.shape}, Adj shape: {adj.shape}, RNN States shape {rnn_states.shape}")
 
@@ -148,7 +151,12 @@ class GMPERunner(Runner):
 
     def warmup(self):
         # reset env
-        obs, agent_id, node_obs, adj, disturbances = self.envs.reset()
+        reset_result = self.envs.reset()
+        if len(reset_result) == 5:
+            obs, agent_id, node_obs, adj, disturbances = reset_result
+        else:
+            obs, agent_id, node_obs, adj = reset_result
+            disturbances = None
 
         # replay buffer
         if self.use_centralized_V:
@@ -377,7 +385,12 @@ class GMPERunner(Runner):
     @torch.no_grad()
     def eval(self, total_num_steps: int):
         eval_episode_rewards = []
-        eval_obs, eval_agent_id, eval_node_obs, eval_adj, eval_disturbances = self.eval_envs.reset()
+        reset_result = self.eval_envs.reset()
+        if len(reset_result) == 5:
+            eval_obs, eval_agent_id, eval_node_obs, eval_adj, eval_disturbances = reset_result
+        else:
+            eval_obs, eval_agent_id, eval_node_obs, eval_adj = reset_result
+            eval_disturbances = None
 
         eval_rnn_states = np.zeros(
             (self.n_eval_rollout_threads, *self.buffer.rnn_states.shape[2:]),
@@ -465,16 +478,29 @@ class GMPERunner(Runner):
                 )
 
             # Obser reward and next obs
-            (
-                eval_obs,
-                eval_agent_id,
-                eval_node_obs,
-                eval_adj,
-                eval_disturbances,
-                eval_rewards,
-                eval_dones,
-                eval_infos,
-            ) = self.eval_envs.step(eval_actions_env)
+            step_result = self.eval_envs.step(eval_actions_env)
+            if len(step_result) == 8:
+                (
+                    eval_obs,
+                    eval_agent_id,
+                    eval_node_obs,
+                    eval_adj,
+                    eval_disturbances,
+                    eval_rewards,
+                    eval_dones,
+                    eval_infos,
+                ) = step_result
+            else:
+                (
+                    eval_obs,
+                    eval_agent_id,
+                    eval_node_obs,
+                    eval_adj,
+                    eval_rewards,
+                    eval_dones,
+                    eval_infos,
+                ) = step_result
+                eval_disturbances = None
             eval_episode_rewards.append(eval_rewards)
 
             eval_rnn_states[eval_dones == True] = np.zeros(
@@ -526,7 +552,12 @@ class GMPERunner(Runner):
         )
 
         for episode in range(self.all_args.render_episodes):
-            obs, agent_id, node_obs, adj, disturbances = envs.reset()
+            reset_result = envs.reset()
+            if len(reset_result) == 5:
+                obs, agent_id, node_obs, adj, disturbances = reset_result
+            else:
+                obs, agent_id, node_obs, adj = reset_result
+                disturbances = None
             if not get_metrics:
                 if self.all_args.save_gifs:
                     image = envs.render("rgb_array")[0][0]
@@ -624,9 +655,12 @@ class GMPERunner(Runner):
                     )
 
                 # Obser reward and next obs
-                obs, agent_id, node_obs, adj, disturbances, rewards, dones, infos = envs.step(
-                    actions_env
-                )
+                step_result = envs.step(actions_env)
+                if len(step_result) == 8:
+                    obs, agent_id, node_obs, adj, disturbances, rewards, dones, infos = step_result
+                else:
+                    obs, agent_id, node_obs, adj, rewards, dones, infos = step_result
+                    disturbances = None
                 episode_rewards.append(rewards)
 
                 rnn_states[dones == True] = np.zeros(
