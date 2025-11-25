@@ -119,6 +119,7 @@ class GR_MAPPOPolicy:
         rnn_states_actor,
         rnn_states_critic,
         ssm_states,
+        disturbances,      
         masks,
         available_actions=None,
         deterministic=False,
@@ -143,6 +144,8 @@ class GR_MAPPOPolicy:
             If critic is RNN, RNN states for critic.
         ssm_states: (torch.Tensor or None)
             SSM states for MAD policies (unused in standard graph policy).
+        disturbances: (torch.Tensor)
+            Disturbance values, not used, only included for compatibility.
         masks: (np.ndarray)
             Denotes points at which RNN states should be reset.
         available_actions: (np.ndarray)
@@ -214,6 +217,7 @@ class GR_MAPPOPolicy:
         share_agent_id,
         rnn_states_actor,
         rnn_states_critic,
+        disturbances,
         action,
         masks,
         available_actions=None,
@@ -240,6 +244,8 @@ class GR_MAPPOPolicy:
             if actor is RNN, RNN states for actor.
         rnn_states_critic: (np.ndarray)
             if critic is RNN, RNN states for critic.
+        disturbances: (torch.Tensor)
+            Disturbance values, not used, only included for compatibility.
         action: (np.ndarray)
             actions whose log probabilites and entropy to compute.
         masks: (np.ndarray)

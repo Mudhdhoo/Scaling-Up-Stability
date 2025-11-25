@@ -1,4 +1,5 @@
 import argparse
+import math
 from typing import Tuple
 
 import gymnasium as gym
@@ -14,8 +15,6 @@ from onpolicy.algorithms.utils.popart import PopArt
 from onpolicy.utils.util import get_shape_from_obs_space
 from onpolicy.algorithms.utils.ssm import SSM
 from onpolicy.algorithms.utils.gnn import ZeroPreservingGNNBase
-from loguru import logger
-import time
 
 def minibatchGenerator(
     obs: Tensor, node_obs: Tensor, adj: Tensor, agent_id: Tensor, max_batch_size: int
@@ -268,10 +267,11 @@ class MAD_Actor(nn.Module):
         # SSM outputs magnitude term M_t = SSM(GNN(neighbors_at_t0))
         ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
 
-        # Take absolute value and clamp to prevent extreme Jacobian values
-        # Clamping to [0.01, 10.0] prevents log(magnitude) from being too negative or too positive
-        #magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max if self.training else self.m_max_final)
-        magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max)
+        # Use shifted softplus for L_p-stability (zero-preserving) AND smooth gradients
+        # softplus(x) - log(2) ensures f(0) = 0 while maintaining differentiability everywhere
+        # Unlike ReLU (gradient=0 for x<0), this learns from ALL samples (gradient always > 0)
+        # This preserves L_p-stability: when disturbances=0, magnitude=0
+        magnitude = (torch.nn.functional.softplus(ssm_out_raw) - math.log(2.0)).clamp(min=1e-6, max=self.m_max)
        # logger.info(f'magnitude: {magnitude}')
 
         # action = u_base + |M| * tanh(y)
@@ -417,8 +417,10 @@ class MAD_Actor(nn.Module):
 
         ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
 
-        # magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max if self.training else self.m_max_final)
-        magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max)
+        # Use shifted softplus for L_p-stability (zero-preserving) AND smooth gradients
+        # softplus(x) - log(2) ensures f(0) = 0 while maintaining differentiability everywhere
+        # Unlike ReLU (gradient=0 for x<0), this learns from ALL samples (gradient always > 0)
+        magnitude = (torch.nn.functional.softplus(ssm_out_raw) - math.log(2.0)).clamp(min=1e-6, max=self.m_max)
 
         # CRITICAL: Must recover y from stored action using NEW magnitude for correct PPO importance sampling
         # The stored action was: action = u_base + M_old * tanh(y_old)

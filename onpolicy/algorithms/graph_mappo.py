@@ -178,45 +178,24 @@ class GR_MAPPO():
         return_batch = check(return_batch).to(**self.tpdv)
         active_masks_batch = check(active_masks_batch).to(**self.tpdv)
 
-        # Call policy.evaluate_actions with appropriate signature
-        # MAD policy has disturbances parameter, regular policy does not
-        if disturbances_batch is not None:
-            # MAD policy: includes disturbances between rnn_states_critic and action
-            values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
-                                                            share_obs_batch,
-                                                            obs_batch,
-                                                            node_obs_batch,
-                                                            adj_batch,
-                                                            agent_id_batch,
-                                                            share_agent_id_batch,
-                                                            rnn_states_batch,
-                                                            rnn_states_critic_batch,
-                                                            disturbances_batch,
-                                                            actions_batch,
-                                                            masks_batch,
-                                                            available_actions_batch,
-                                                            active_masks_batch,
-                                                            lru_hidden_states_batch,
-                                                            pre_tanh_value_batch
-                                                            )
-        else:
-            # Regular policy: no disturbances parameter
-            values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
-                                                            share_obs_batch,
-                                                            obs_batch,
-                                                            node_obs_batch,
-                                                            adj_batch,
-                                                            agent_id_batch,
-                                                            share_agent_id_batch,
-                                                            rnn_states_batch,
-                                                            rnn_states_critic_batch,
-                                                            actions_batch,
-                                                            masks_batch,
-                                                            available_actions_batch,
-                                                            active_masks_batch,
-                                                            lru_hidden_states_batch,
-                                                            pre_tanh_value_batch
-                                                            )
+        values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
+                                                        share_obs_batch,
+                                                        obs_batch,
+                                                        node_obs_batch,
+                                                        adj_batch,
+                                                        agent_id_batch,
+                                                        share_agent_id_batch,
+                                                        rnn_states_batch,
+                                                        rnn_states_critic_batch,
+                                                        disturbances_batch,
+                                                        actions_batch,
+                                                        masks_batch,
+                                                        available_actions_batch,
+                                                        active_masks_batch,
+                                                        lru_hidden_states_batch,
+                                                        pre_tanh_value_batch
+                                                        )
+
         # actor update
         # print(f'obs: {obs_batch.shape}')
         # st = time.time()

@@ -104,8 +104,8 @@ env = MultiAgentGraphEnv(world=world, reset_callback=scenario.reset_world,
 policy = MAD_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 #policy = GR_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 
-model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy/run43/models/actor.pt"
-#model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run39/models/actor.pt"
+model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy_relu/run1/models/actor.pt"
+#model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run42/models/actor.pt"
 
 model_loaded = torch.load(model_path)
 
@@ -114,13 +114,10 @@ policy.actor.load_state_dict(model_loaded)
 policy.actor.eval()
 policy.actor.under_training = False
 
-
-# Lambda_mod = torch.exp(-torch.exp(policy.actor.ssm.LRUR.nu_log))
-# Lambda_re = Lambda_mod * torch.cos(torch.exp(policy.actor.ssm.LRUR.theta_log))
-# Lambda_im = Lambda_mod * torch.sin(torch.exp(policy.actor.ssm.LRUR.theta_log))
-# Lambda = torch.complex(Lambda_re, Lambda_im).abs()  # Eigenvalues matrix
-
-# logger.info(f'Lambda: {Lambda}')
+Lambda_mod = torch.exp(-torch.exp(policy.actor.ssm.LRUR.nu_log))
+Lambda_re = Lambda_mod * torch.cos(torch.exp(policy.actor.ssm.LRUR.theta_log))
+Lambda_im = Lambda_mod * torch.sin(torch.exp(policy.actor.ssm.LRUR.theta_log))
+Lambda = torch.complex(Lambda_re, Lambda_im).abs()  # Eigenvalues matrix
 
 # Initialize separate RNN states and masks for each agent
 rnn_states = np.zeros((env.n, all_args.recurrent_N, all_args.hidden_size), dtype=np.float32)
@@ -137,7 +134,7 @@ frame_time = 1.0 / target_fps
 num_collisions = 0
 
 episodes = 1
-epsiode_length = 200
+epsiode_length = 10000
 
 magnitudes = []
 for episode in range(episodes):

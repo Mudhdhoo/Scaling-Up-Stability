@@ -97,10 +97,6 @@ def GraphMPEEnv(args):
         # Default to discrete actions
         discrete_action = True
 
-    # MAD policy needs disturbances as observation input
-    # Standard InforMARL policy doesn't (but disturbances still affect environment if enabled)
-    return_disturbances = hasattr(args, 'use_mad_policy') and args.use_mad_policy
-
     # create multiagent environment
     env = MultiAgentGraphEnv(
         world=world,
@@ -113,7 +109,6 @@ def GraphMPEEnv(args):
         info_callback=scenario.info_callback,
         scenario_name=args.scenario_name,
         discrete_action=discrete_action,
-        return_disturbances=return_disturbances,
     )
 
     return env

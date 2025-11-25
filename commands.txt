@@ -1,6 +1,6 @@
 ---------- INFORMARL ----------
 
-python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
+caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --project_name "informarl" \
 --env_name "GraphMPE" \
 --algorithm_name "rmappo" \
@@ -19,7 +19,8 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --graph_feat_type "relative" \
 --auto_mini_batch_size --target_mini_batch_size 128 \
 --use_wandb "False" \
---discrete_action "False"
+--discrete_action "False" \
+--use_disturbance
 
 ---------- MAD ----------
 
@@ -52,72 +53,6 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 
 
 
----------- GNN + BASE ----------
-
-python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
---project_name "informarl_base" \
---env_name "GraphMPE" \
---algorithm_name "rmappo" \
---seed 0 \
---experiment_name "gnn_base" \
---scenario_name "navigation_graph" \
---num_agents 3 \
---collision_rew 5 \
---n_training_threads 1 --n_rollout_threads 128 \
---num_mini_batch 1 \
---episode_length 25 \
---num_env_steps 2000000 \
---ppo_epoch 10 --use_ReLU --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
---user_name "marl" \
---use_cent_obs "False" \
---graph_feat_type "relative" \
---auto_mini_batch_size --target_mini_batch_size 128 \
---use_wandb "False" \
---use_gnn_plus_base \
---discrete_action "False" \
---kp_val 0.5 
-
-
----------- GNN + SSM + BASE ----------
-
-caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
---project_name "informarl_base" \
---env_name "GraphMPE" \
---algorithm_name "rmappo" \
---seed 0 \
---experiment_name "gnn_ssm_base" \
---scenario_name "navigation_graph" \
---num_agents 3 \
---collision_rew 5 \
---n_training_threads 1 --n_rollout_threads 128 \
---num_mini_batch 1 \
---episode_length 25 \
---num_env_steps 2000000 \
---ppo_epoch 10 --use_ReLU --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
---user_name "marl" \
---use_cent_obs "False" \
---graph_feat_type "relative" \
---auto_mini_batch_size --target_mini_batch_size 128 \
---use_wandb "False" \
---use_ssm_plus_base \
---discrete_action "False" \
---kp_val 0.5
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -126,7 +61,7 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --env_name "GraphMPE" \
 --algorithm_name "rmappo" \
 --seed 0 \
---experiment_name "no_detach_y" \
+--experiment_name "mad_policy_no_clamp_rmax" \
 --scenario_name "navigation_graph" \
 --num_agents 3 \
 --collision_rew 5 \
@@ -142,11 +77,98 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --use_wandb "False" \
 --use_mad_policy \
 --discrete_action "False" \
---kp_val 1 \
+--kp_val 0.5 \
+--rmin 0.9 \
+--rmax 1.0 \
+--m_max_start 2 \
+--use_disturbance
+
+
+
+
+
+EXPERIMENT 1 - LARGER KP
+python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
+--project_name "informarl_base" \
+--env_name "GraphMPE" \
+--algorithm_name "rmappo" \
+--seed 0 \
+--experiment_name "mad_policy_kp_1_5" \
+--scenario_name "navigation_graph" \
+--num_agents 3 \
+--collision_rew 5 \
+--n_training_threads 1 --n_rollout_threads 128 \
+--num_mini_batch 1 \
+--episode_length 25 \
+--num_env_steps 2000000 \
+--ppo_epoch 10 --use_ReLU --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
+--user_name "marl" \
+--use_cent_obs "False" \
+--graph_feat_type "relative" \
+--auto_mini_batch_size --target_mini_batch_size 128 \
+--use_wandb "False" \
+--use_mad_policy \
+--discrete_action "False" \
+--kp_val 1.5 \
 --rmin 0.85 \
 --rmax 0.9 \
 --m_max_start 2 \
---no_detach_y \
---ssm_hidden_dim 32 \
---ssm_mlp_hidden 32 \
---entropy_coef 0.0
+--use_disturbance
+
+EXPERIMENT 2 - LARGER DECAY RATE
+python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
+--project_name "informarl_base" \
+--env_name "GraphMPE" \
+--algorithm_name "rmappo" \
+--seed 0 \
+--experiment_name "mad_policy_decay_rate_0_2" \
+--scenario_name "navigation_graph" \
+--num_agents 3 \
+--collision_rew 5 \
+--n_training_threads 1 --n_rollout_threads 128 \
+--num_mini_batch 1 \
+--episode_length 25 \
+--num_env_steps 2000000 \
+--ppo_epoch 10 --use_ReLU --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
+--user_name "marl" \
+--use_cent_obs "False" \
+--graph_feat_type "relative" \
+--auto_mini_batch_size --target_mini_batch_size 128 \
+--use_wandb "False" \
+--use_mad_policy \
+--discrete_action "False" \
+--kp_val 0.5 \
+--rmin 0.85 \
+--rmax 0.9 \
+--m_max_start 2 \
+--use_disturbance \ 
+--disturbance_decay_rate 0.2
+
+
+EXPERIMENT 3 - LARGER MAGNITUDE CAP
+python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
+--project_name "informarl_base" \
+--env_name "GraphMPE" \
+--algorithm_name "rmappo" \
+--seed 0 \
+--experiment_name "mad_policy_m_cap_3" \
+--scenario_name "navigation_graph" \
+--num_agents 3 \
+--collision_rew 5 \
+--n_training_threads 1 --n_rollout_threads 128 \
+--num_mini_batch 1 \
+--episode_length 25 \
+--num_env_steps 2000000 \
+--ppo_epoch 10 --use_ReLU --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
+--user_name "marl" \
+--use_cent_obs "False" \
+--graph_feat_type "relative" \
+--auto_mini_batch_size --target_mini_batch_size 128 \
+--use_wandb "False" \
+--use_mad_policy \
+--discrete_action "False" \
+--kp_val 0.5 \
+--rmin 0.85 \
+--rmax 0.9 \
+--m_max_start 3 \
+--use_disturbance \ 
