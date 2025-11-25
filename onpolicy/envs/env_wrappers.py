@@ -938,17 +938,39 @@ def graphworker(remote, parent_remote, env_fn_wrapper):
     while True:
         cmd, data = remote.recv()
         if cmd == "step":
-            ob, ag_id, node_ob, adj, disturbance, reward, done, info = env.step(data)
+            step_result = env.step(data)
+            # Handle both 7-value (no disturbances) and 8-value (with disturbances) returns
+            if len(step_result) == 8:
+                ob, ag_id, node_ob, adj, disturbance, reward, done, info = step_result
+            else:
+                ob, ag_id, node_ob, adj, reward, done, info = step_result
+                disturbance = None
+
             if "bool" in done.__class__.__name__:
                 if done:
-                    ob, ag_id, node_ob, adj, disturbance = env.reset()
+                    reset_result = env.reset()
+                    if len(reset_result) == 5:
+                        ob, ag_id, node_ob, adj, disturbance = reset_result
+                    else:
+                        ob, ag_id, node_ob, adj = reset_result
+                        disturbance = None
             else:
                 if np.all(done):
-                    ob, ag_id, node_ob, adj, disturbance = env.reset()
+                    reset_result = env.reset()
+                    if len(reset_result) == 5:
+                        ob, ag_id, node_ob, adj, disturbance = reset_result
+                    else:
+                        ob, ag_id, node_ob, adj = reset_result
+                        disturbance = None
 
             remote.send((ob, ag_id, node_ob, adj, disturbance, reward, done, info))
         elif cmd == "reset":
-            ob, ag_id, node_ob, adj, disturbance = env.reset()
+            reset_result = env.reset()
+            if len(reset_result) == 5:
+                ob, ag_id, node_ob, adj, disturbance = reset_result
+            else:
+                ob, ag_id, node_ob, adj = reset_result
+                disturbance = None
             remote.send((ob, ag_id, node_ob, adj, disturbance))
         elif cmd == "render":
             if data == "rgb_array":
@@ -957,7 +979,12 @@ def graphworker(remote, parent_remote, env_fn_wrapper):
             elif data == "human":
                 env.render(mode=data)
         elif cmd == "reset_task":
-            ob, ag_id, node_ob, adj, disturbance = env.reset_task()
+            reset_result = env.reset_task()
+            if len(reset_result) == 5:
+                ob, ag_id, node_ob, adj, disturbance = reset_result
+            else:
+                ob, ag_id, node_ob, adj = reset_result
+                disturbance = None
             remote.send((ob, ag_id, node_ob, adj, disturbance))
         elif cmd == "close":
             env.close()
@@ -1005,22 +1032,44 @@ class GraphDummyVecEnv(ShareVecEnv):
 
     def step_wait(self):
         results = [env.step(a) for (a, env) in zip(self.actions, self.envs)]
-        obs, ag_ids, node_obs, adj, disturbances, rews, dones, infos = map(np.array, zip(*results))
+        # Handle both 7-value and 8-value returns
+        if len(results[0]) == 8:
+            obs, ag_ids, node_obs, adj, disturbances, rews, dones, infos = map(np.array, zip(*results))
+        else:
+            obs, ag_ids, node_obs, adj, rews, dones, infos = map(np.array, zip(*results))
+            disturbances = None
 
         for i, done in enumerate(dones):
             if "bool" in done.__class__.__name__:
                 if done:
-                    obs[i], ag_ids[i], node_obs[i], adj[i], disturbances[i] = self.envs[i].reset()
+                    reset_result = self.envs[i].reset()
+                    if len(reset_result) == 5:
+                        obs[i], ag_ids[i], node_obs[i], adj[i], dist_i = reset_result
+                        if disturbances is not None:
+                            disturbances[i] = dist_i
+                    else:
+                        obs[i], ag_ids[i], node_obs[i], adj[i] = reset_result
             else:
                 if np.all(done):
-                    obs[i], ag_ids[i], node_obs[i], adj[i], disturbances[i] = self.envs[i].reset()
+                    reset_result = self.envs[i].reset()
+                    if len(reset_result) == 5:
+                        obs[i], ag_ids[i], node_obs[i], adj[i], dist_i = reset_result
+                        if disturbances is not None:
+                            disturbances[i] = dist_i
+                    else:
+                        obs[i], ag_ids[i], node_obs[i], adj[i] = reset_result
 
         self.actions = None
         return obs, ag_ids, node_obs, adj, disturbances, rews, dones, infos
 
     def reset(self):
         results = [env.reset() for env in self.envs]
-        obs, ag_id, node_obs, adj, disturbances = map(np.array, zip(*results))
+        # Handle both 4-value and 5-value returns
+        if len(results[0]) == 5:
+            obs, ag_id, node_obs, adj, disturbances = map(np.array, zip(*results))
+        else:
+            obs, ag_id, node_obs, adj = map(np.array, zip(*results))
+            disturbances = None
         return obs, ag_id, node_obs, adj, disturbances
 
     def close(self):
@@ -1093,12 +1142,17 @@ class GraphSubprocVecEnv(ShareVecEnv):
         results = [remote.recv() for remote in self.remotes]
         self.waiting = False
         obs, ag_ids, node_obs, adj, disturbances, rews, dones, infos = zip(*results)
+        # Handle None disturbances (when not using MAD policy)
+        if disturbances[0] is not None:
+            disturbances = np.stack(disturbances)
+        else:
+            disturbances = None
         return (
             np.stack(obs),
             np.stack(ag_ids),
             np.stack(node_obs),
             np.stack(adj),
-            np.stack(disturbances),
+            disturbances,
             np.stack(rews),
             np.stack(dones),
             infos,
@@ -1109,7 +1163,12 @@ class GraphSubprocVecEnv(ShareVecEnv):
             remote.send(("reset", None))
         results = [remote.recv() for remote in self.remotes]
         obs, ag_ids, node_obs, adj, disturbances = zip(*results)
-        return (np.stack(obs), np.stack(ag_ids), np.stack(node_obs), np.stack(adj), np.stack(disturbances))
+        # Handle None disturbances (when not using MAD policy)
+        if disturbances[0] is not None:
+            disturbances = np.stack(disturbances)
+        else:
+            disturbances = None
+        return (np.stack(obs), np.stack(ag_ids), np.stack(node_obs), np.stack(adj), disturbances)
 
     def reset_task(self):
         for remote in self.remotes:

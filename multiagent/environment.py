@@ -731,6 +731,7 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
         shared_viewer: bool = True,
         discrete_action: bool = True,
         scenario_name: str = "navigation",
+        return_disturbances: bool = False,
     ) -> None:
         super(MultiAgentGraphEnv, self).__init__(
             world,
@@ -746,6 +747,7 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
         self.update_graph = update_graph
         self.graph_observation_callback = graph_observation_callback
         self.id_callback = id_callback
+        self.return_disturbances = return_disturbances  # Whether to return disturbances to policy
         self.set_graph_obs_space()
 
     def set_graph_obs_space(self):
@@ -828,7 +830,11 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
         if self.shared_reward:
             reward_n = [[reward]] * self.n  # NOTE this line is similar to PPOEnv
 
-        return obs_n, agent_id_n, node_obs_n, adj_n, disturbance_n, reward_n, done_n, info_n
+        # Return disturbances only if needed by policy (e.g., MAD policy)
+        if self.return_disturbances:
+            return obs_n, agent_id_n, node_obs_n, adj_n, disturbance_n, reward_n, done_n, info_n
+        else:
+            return obs_n, agent_id_n, node_obs_n, adj_n, reward_n, done_n, info_n
 
     def _get_disturbance_graph(self, agent: Agent):
         """
@@ -866,7 +872,7 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
         # reset renderer
         self._reset_render()
         # record observations for each agent
-        obs_n, node_obs_n, adj_n, agent_id_n, disturbance_n = [], [], [], [], []
+        obs_n, node_obs_n, adj_n, agent_id_n = [], [], [], []
         self.agents = self.world.policy_agents
         for agent in self.agents:
             obs_n.append(self._get_obs(agent))
@@ -874,11 +880,15 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
             node_obs, adj = self._get_graph_obs(agent)
             node_obs_n.append(node_obs)
             adj_n.append(adj)
+
+        # Return disturbances only if needed by policy (e.g., MAD policy)
+        if self.return_disturbances:
             # At reset, return node_obs as "disturbances" (for SSM kickstart)
             # This has the same shape as node_obs and will be used directly
-            disturbance_n.append(node_obs.copy())
-
-        return obs_n, agent_id_n, node_obs_n, adj_n, disturbance_n
+            disturbance_n = [node_obs.copy() for node_obs in node_obs_n]
+            return obs_n, agent_id_n, node_obs_n, adj_n, disturbance_n
+        else:
+            return obs_n, agent_id_n, node_obs_n, adj_n
 
     def _get_graph_obs(self, agent: Agent):
         if self.graph_observation_callback is None:
