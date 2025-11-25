@@ -211,6 +211,20 @@ class GraphReplayBuffer(object):
         self.bad_masks = np.ones_like(self.masks)
         self.active_masks = np.ones_like(self.masks)
 
+        # Disturbances for MAD policy - EXACTLY the same structure as node_obs
+        # Shape: (episode_length + 1, n_rollout_threads, num_agents, num_nodes, node_feature_dim)
+        # At t=0: Contains node_obs (for SSM kickstart)
+        # At t>0: Contains padded disturbances (same shape as node_obs)
+        self.disturbances = np.zeros(
+            (
+                self.episode_length + 1,
+                self.n_rollout_threads,
+                num_agents,
+                *node_obs_shape,  # Same shape as node_obs
+            ),
+            dtype=np.float32,
+        )
+
         self.step = 0
 
     def insert(
@@ -233,6 +247,7 @@ class GraphReplayBuffer(object):
         available_actions: arr = None,
         lru_hidden_states: arr = None,
         pre_tanh_value: arr = None,
+        disturbances: arr = None,
     ) -> None:
         """
         Insert data into the buffer.
@@ -295,6 +310,8 @@ class GraphReplayBuffer(object):
             self.lru_hidden_states[self.step + 1] = lru_hidden_states.copy()
         if pre_tanh_value is not None:
             self.pre_tanh_value[self.step] = pre_tanh_value.copy()
+        if disturbances is not None:
+            self.disturbances[self.step + 1] = disturbances.copy()
 
         self.step = (self.step + 1) % self.episode_length
 
@@ -315,6 +332,7 @@ class GraphReplayBuffer(object):
         self.active_masks[0] = self.active_masks[-1].copy()
         if self.available_actions is not None:
             self.available_actions[0] = self.available_actions[-1].copy()
+        self.disturbances[0] = self.disturbances[-1].copy()
 
     def compute_returns(
         self, next_value: arr, value_normalizer: Optional[PopArt] = None
@@ -498,6 +516,7 @@ class GraphReplayBuffer(object):
             )
         else:
             lru_hidden_states = None
+        disturbances = self.disturbances[:-1].reshape(-1, *self.disturbances.shape[3:])
         actions = self.actions.reshape(-1, self.actions.shape[-1])
         pre_tanh_value = self.pre_tanh_value.reshape(-1, self.pre_tanh_value.shape[-1])
         if self.available_actions is not None:
@@ -524,6 +543,7 @@ class GraphReplayBuffer(object):
             rnn_states_batch = rnn_states[indices]
             rnn_states_critic_batch = rnn_states_critic[indices]
             lru_hidden_states_batch = lru_hidden_states[indices] if lru_hidden_states is not None else None
+            disturbances_batch = disturbances[indices]
             actions_batch = actions[indices]
             pre_tanh_value_batch = pre_tanh_value[indices]
             if self.available_actions is not None:
@@ -540,7 +560,7 @@ class GraphReplayBuffer(object):
             else:
                 adv_targ = advantages[indices]
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch, disturbances_batch
 
     def naive_recurrent_generator(
         self, advantages: arr, num_mini_batch: int
@@ -604,6 +624,7 @@ class GraphReplayBuffer(object):
             )
         else:
             lru_hidden_states = None
+        disturbances = self.disturbances.reshape(-1, batch_size, *self.disturbances.shape[3:])
         actions = self.actions.reshape(-1, batch_size, self.actions.shape[-1])
         pre_tanh_value = self.pre_tanh_value.reshape(-1, batch_size, self.pre_tanh_value.shape[-1])
         if self.available_actions is not None:
@@ -629,6 +650,7 @@ class GraphReplayBuffer(object):
             rnn_states_batch = []
             rnn_states_critic_batch = []
             lru_hidden_states_batch = []
+            disturbances_batch = []
             actions_batch = []
             pre_tanh_value_batch = []
             available_actions_batch = []
@@ -651,6 +673,7 @@ class GraphReplayBuffer(object):
                 rnn_states_critic_batch.append(rnn_states_critic[0:1, ind])
                 if lru_hidden_states is not None:
                     lru_hidden_states_batch.append(lru_hidden_states[:-1, ind])
+                disturbances_batch.append(disturbances[:-1, ind])
                 actions_batch.append(actions[:, ind])
                 pre_tanh_value_batch.append(pre_tanh_value[:, ind])
                 if self.available_actions is not None:
@@ -671,6 +694,7 @@ class GraphReplayBuffer(object):
             adj_batch = np.stack(adj_batch, 1)
             agent_id_batch = np.stack(agent_id_batch, 1)
             share_agent_id_batch = np.stack(share_agent_id_batch, 1)
+            disturbances_batch = np.stack(disturbances_batch, 1)
             actions_batch = np.stack(actions_batch, 1)
             pre_tanh_value_batch = np.stack(pre_tanh_value_batch, 1)
             if self.available_actions is not None:
@@ -703,6 +727,7 @@ class GraphReplayBuffer(object):
             adj_batch = _flatten(T, N, adj_batch)
             agent_id_batch = _flatten(T, N, agent_id_batch)
             share_agent_id_batch = _flatten(T, N, share_agent_id_batch)
+            disturbances_batch = _flatten(T, N, disturbances_batch)
             actions_batch = _flatten(T, N, actions_batch)
             pre_tanh_value_batch = _flatten(T, N, pre_tanh_value_batch)
             if lru_hidden_states_batch is not None:
@@ -718,7 +743,7 @@ class GraphReplayBuffer(object):
             old_action_log_probs_batch = _flatten(T, N, old_action_log_probs_batch)
             adv_targ = _flatten(T, N, adv_targ)
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch, disturbances_batch
 
     def recurrent_generator(
         self, advantages: arr, num_mini_batch: int, data_chunk_length: int
@@ -786,6 +811,11 @@ class GraphReplayBuffer(object):
             .reshape(-1, *self.node_obs.shape[3:])
         )
         adj = self.adj[:-1].transpose(1, 2, 0, 3, 4).reshape(-1, *self.adj.shape[3:])
+        disturbances = (
+            self.disturbances[:-1]
+            .transpose(1, 2, 0, 3, 4)
+            .reshape(-1, *self.disturbances.shape[3:])
+        )
 
         agent_id = _cast(self.agent_id[:-1])
         share_agent_id = _cast(self.share_agent_id[:-1])
@@ -833,6 +863,7 @@ class GraphReplayBuffer(object):
             rnn_states_batch = []
             rnn_states_critic_batch = []
             lru_hidden_states_batch = []
+            disturbances_batch = []
             actions_batch = []
             pre_tanh_value_batch = []
             available_actions_batch = []
@@ -850,6 +881,7 @@ class GraphReplayBuffer(object):
                 obs_batch.append(obs[ind : ind + data_chunk_length])
                 node_obs_batch.append(node_obs[ind : ind + data_chunk_length])
                 adj_batch.append(adj[ind : ind + data_chunk_length])
+                disturbances_batch.append(disturbances[ind : ind + data_chunk_length])
                 agent_id_batch.append(agent_id[ind : ind + data_chunk_length])
                 share_agent_id_batch.append(
                     share_agent_id[ind : ind + data_chunk_length]
@@ -881,6 +913,7 @@ class GraphReplayBuffer(object):
             obs_batch = np.stack(obs_batch, axis=1)
             node_obs_batch = np.stack(node_obs_batch, axis=1)
             adj_batch = np.stack(adj_batch, axis=1)
+            disturbances_batch = np.stack(disturbances_batch, axis=1)
             agent_id_batch = np.stack(agent_id_batch, axis=1)
             share_agent_id_batch = np.stack(share_agent_id_batch, axis=1)
 
@@ -914,6 +947,7 @@ class GraphReplayBuffer(object):
             obs_batch = _flatten(L, N, obs_batch)
             node_obs_batch = _flatten(L, N, node_obs_batch)
             adj_batch = _flatten(L, N, adj_batch)
+            disturbances_batch = _flatten(L, N, disturbances_batch)
             agent_id_batch = _flatten(L, N, agent_id_batch)
             share_agent_id_batch = _flatten(L, N, share_agent_id_batch)
             actions_batch = _flatten(L, N, actions_batch)
@@ -931,7 +965,7 @@ class GraphReplayBuffer(object):
             old_action_log_probs_batch = _flatten(L, N, old_action_log_probs_batch)
             adv_targ = _flatten(L, N, adv_targ)
 
-            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch
+            yield share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, actions_batch, value_preds_batch, return_batch, masks_batch, active_masks_batch, old_action_log_probs_batch, adv_targ, available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch, disturbances_batch
 
 
 def create_generator():

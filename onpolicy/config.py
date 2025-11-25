@@ -882,13 +882,6 @@ def graph_config(args, parser):
         help="Exponential decay rate for the disturbance over time",
     )
 
-    parser.add_argument(
-        "--no_detach_y",
-        action="store_true",
-        default=False,
-        help="Whether to detach the magnitude term in the MAD policy",
-    )
-
     all_args = parser.parse_known_args(args)[0]
 
     if all_args.auto_mini_batch_size:

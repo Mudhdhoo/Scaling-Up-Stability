@@ -14,7 +14,6 @@ from onpolicy.config import graph_config, get_config
 import os, sys
 import time
 from distutils.util import strtobool
-
 import matplotlib.pyplot as plt
 
 sys.path.append(os.path.abspath(os.getcwd()))
@@ -27,7 +26,7 @@ def parse_args(args, parser):
         help="Which scenario to run on",
     )
     parser.add_argument("--num_landmarks", type=int, default=3)
-    parser.add_argument("--num_agents", type=int, default=10, help="number of players")
+    parser.add_argument("--num_agents", type=int, default=3, help="number of players")
     parser.add_argument(
         "--num_obstacles", type=int, default=3, help="Number of obstacles"
     )
@@ -89,13 +88,6 @@ all_args, parser = graph_config(args, parser)
 # create world
 world = scenario.make_world(all_args)
 
-# Set disturbance parameters if enabled
-if hasattr(all_args, 'use_disturbance') and all_args.use_disturbance:
-    world.use_disturbance = True
-    world.disturbance_std = getattr(all_args, 'disturbance_std', 0.1)
-    world.disturbance_decay_rate = getattr(all_args, 'disturbance_decay_rate', 0.1)
-    world.disturbance_type = getattr(all_args, 'disturbance_type', 'position')
-
 # create multiagent environment
 env = MultiAgentGraphEnv(world=world, reset_callback=scenario.reset_world, 
                     reward_callback=scenario.reward, 
@@ -112,7 +104,7 @@ env = MultiAgentGraphEnv(world=world, reset_callback=scenario.reset_world,
 policy = MAD_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 #policy = GR_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 
-model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy/run36/models/actor.pt"
+model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy/run43/models/actor.pt"
 #model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run39/models/actor.pt"
 
 model_loaded = torch.load(model_path)
@@ -130,9 +122,6 @@ policy.actor.under_training = False
 
 # logger.info(f'Lambda: {Lambda}')
 
-# execution loop
-obs_n, agent_id_n, node_obs_n, adj_n = env.reset()
-
 # Initialize separate RNN states and masks for each agent
 rnn_states = np.zeros((env.n, all_args.recurrent_N, all_args.hidden_size), dtype=np.float32)
 masks = np.zeros((env.n, 1), dtype=np.float32)  # 0 = first step (seeds LRU with x0)
@@ -148,16 +137,15 @@ frame_time = 1.0 / target_fps
 num_collisions = 0
 
 episodes = 1
-epsiode_length = 250
+epsiode_length = 200
 
 magnitudes = []
 for episode in range(episodes):
-    obs_n, agent_id_n, node_obs_n, adj_n = env.reset()
+    obs_n, agent_id_n, node_obs_n, adj_n, disturbance_n = env.reset()
     env.render()
     for step in range(epsiode_length):
         frame_start = time.time()
         act_n = []
-
         mag_agents = []
         for i in range(env.n):
             # Each agent has its own RNN hidden state and SSM state
@@ -170,6 +158,7 @@ for episode in range(episodes):
                     agent_id=np.array([agent_id_n[i]]),
                     rnn_states=rnn_states[i:i+1],  # Use this agent's RNN state
                     ssm_states=ssm_states[i],  # Use this agent's SSM state
+                    disturbances=disturbance_n[i][None, :],
                     masks=masks[i:i+1],  # Use this agent's mask
                     deterministic=True
                 )
@@ -188,7 +177,7 @@ for episode in range(episodes):
         magnitudes.append(mag_agents)
 
         # step environment
-        obs_n, agent_id_n, node_obs_n, adj_n, reward_n, done_n, info_n = env.step(act_n)
+        obs_n, agent_id_n, node_obs_n, adj_n, disturbance_n, reward_n, done_n, info_n = env.step(act_n)
 
         new_num_collisions = 0
         for info in info_n:

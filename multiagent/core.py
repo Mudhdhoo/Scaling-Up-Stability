@@ -1,4 +1,5 @@
 import numpy as np
+from loguru import logger
 
 
 # physical/external base state of all entites
@@ -25,6 +26,10 @@ class Action(object):
         self.u = None
         # communication action
         self.c = None
+
+class Disturbance(object):
+    def __init__(self):
+        self.w = None
 
 
 # properties of wall entities
@@ -117,6 +122,8 @@ class Agent(Entity):
         self.goal_min_time = np.inf
         # time passed for each agent
         self.t = 0.0
+        # disturbance
+        self.disturbance = Disturbance()
 
 
 # multi-agent world
@@ -151,11 +158,12 @@ class World(object):
         self.cache_dists = False
         self.cached_dist_vect = None
         self.cached_dist_mag = None
-        # disturbance parameters
-        self.use_disturbance = False
+
+        self.current_time_step = 0
+
+        # Disturbance parameters
         self.disturbance_std = 0.1
         self.disturbance_decay_rate = 0.1
-        self.current_time_step = 0
 
     # return all entities in the world
     @property
@@ -198,19 +206,6 @@ class World(object):
         self.cached_dist_mag = np.linalg.norm(self.cached_dist_vect, axis=2)
 
         self.cached_collisions = self.cached_dist_mag <= self.min_dists
-
-    def generate_disturbance(self, n):
-        """Generate disturbance w_t = std * N(0,1) * exp(-decay_rate * t)
-
-        Args:
-            n: Dimension of the disturbance vector (typically dim_p=2 for 2D)
-
-        Returns:
-            Disturbance vector of shape (n,)
-        """
-        w = self.disturbance_std * np.random.randn(n)
-        w *= np.exp(-self.disturbance_decay_rate * self.current_time_step)
-        return w
 
     # get the entity given the id and type
     def get_entity(self, entity_type: str, id: int) -> Entity:
@@ -266,10 +261,6 @@ class World(object):
                     agent.mass * agent.accel if agent.accel is not None else agent.mass
                 ) * agent.action.u + noise
 
-                # Apply disturbance as additive force if enabled
-                if self.use_disturbance and self.disturbance_type == "force":
-                    w = self.generate_disturbance(self.dim_p)
-                    p_force[i] = p_force[i] + w
         return p_force
 
     # gather physical forces acting on entities
@@ -326,8 +317,8 @@ class World(object):
             is_agent = entity in self.agents
             
             # Apply disturbance to position if enabled (agents only)
-            if self.use_disturbance and is_agent:
-                w = self.generate_disturbance(2*self.dim_p)
+            if is_agent:
+                w = entity.disturbance.w
                 entity.state.p_pos += w[:self.dim_p]
                 entity.state.p_vel += w[self.dim_p:]
 

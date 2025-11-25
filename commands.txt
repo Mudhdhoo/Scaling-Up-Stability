@@ -47,7 +47,9 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --kp_val 0.5 \
 --rmin 0.85 \
 --rmax 0.9 \
---m_max_start 2
+--m_max_start 2 \
+--use_disturbance
+
 
 
 ---------- GNN + BASE ----------
@@ -119,7 +121,7 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 
 
 
-python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
+caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --project_name "informarl_base" \
 --env_name "GraphMPE" \
 --algorithm_name "rmappo" \
@@ -140,8 +142,11 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --use_wandb "False" \
 --use_mad_policy \
 --discrete_action "False" \
---kp_val 2 \
+--kp_val 1 \
 --rmin 0.85 \
 --rmax 0.9 \
 --m_max_start 2 \
---no_detach_y
+--no_detach_y \
+--ssm_hidden_dim 32 \
+--ssm_mlp_hidden 32 \
+--entropy_coef 0.0

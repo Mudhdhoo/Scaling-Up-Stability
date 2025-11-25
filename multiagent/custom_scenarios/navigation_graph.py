@@ -139,6 +139,11 @@ class Scenario(BaseScenario):
             obstacle.movable = False
             obstacle.global_id = global_id
             global_id += 1
+
+        world.use_disturbance = args.use_disturbance
+        world.disturbance_std = args.disturbance_std
+        world.disturbance_decay_rate = args.disturbance_decay_rate
+
         # make initial conditions
         self.reset_world(world)
         return world

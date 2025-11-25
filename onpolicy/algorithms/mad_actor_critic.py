@@ -89,6 +89,7 @@ class MAD_Actor(nn.Module):
         self.K_p = args.kp_val
 
         self.m_max = args.m_max_start
+        self.under_training = True  # Flag to control return values during training vs evaluation
 
         obs_shape = get_shape_from_obs_space(obs_space)
         node_obs_shape = get_shape_from_obs_space(node_obs_space)[
@@ -145,6 +146,7 @@ class MAD_Actor(nn.Module):
         agent_id,
         rnn_states,
         ssm_states,
+        disturbances,
         masks,
         available_actions=None,
         deterministic=False,
@@ -161,6 +163,10 @@ class MAD_Actor(nn.Module):
             The agent id to which the observation belongs to
         rnn_states: (np.ndarray / torch.Tensor)
             If RNN network, hidden states for RNN.
+        ssm_states: (torch.Tensor)
+            SSM hidden states for this timestep.
+        disturbances: (torch.Tensor)
+            Disturbance vector for this timestep. (batch_size, 2*dim_p)
         masks: (np.ndarray / torch.Tensor)
             Mask tensor denoting if hidden states
             should be reinitialized to zeros.
@@ -183,6 +189,7 @@ class MAD_Actor(nn.Module):
         agent_id = check(agent_id).to(**self.tpdv).long()
         rnn_states = check(rnn_states).to(**self.tpdv)
         masks = check(masks).to(**self.tpdv)
+        disturbances = check(disturbances).to(**self.tpdv)
         if available_actions is not None:
             available_actions = check(available_actions).to(**self.tpdv)
 
@@ -208,18 +215,17 @@ class MAD_Actor(nn.Module):
                     torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
                 )
 
-        # ==================== Magnitude GNN → SSM Pipeline (Kickstart) ====================
-        # Process neighbor observations through zero-preserving GNN
-        # This preserves L_p-stability: f(0) = 0
-        mag_gnn_out = self.mag_gnn(node_obs, adj, agent_id)  # (batch_size, mag_gnn_out_dim)
+        # ==================== Magnitude GNN → SSM Pipeline ====================
+        # Process disturbances through zero-preserving GNN (preserves L_p-stability: f(0) = 0)
+        #
+        # Disturbances have the SAME shape as node_obs: (batch_size, num_nodes, node_feature_dim)
+        # At t=0: disturbances = node_obs (for SSM kickstart)
+        # At t>0: disturbances = padded actual disturbances (already padded in environment)
+        # Both use the SAME adjacency matrix to enable information sharing between agents
 
-        # SSM input: GNN output at t=0 (reset), zeros otherwise
-        # This "kickstarts" the SSM with aggregated neighbor information at episode start
-        ssm_input = torch.where(
-            reset_mask.unsqueeze(-1).expand_as(mag_gnn_out),
-            mag_gnn_out,  # At reset: use GNN-processed neighbor observations
-            torch.zeros_like(mag_gnn_out)  # Otherwise: zero input
-        )
+        # Simply pass disturbances through GNN (no branching needed!)
+        mag_gnn_out = self.mag_gnn(disturbances, adj, agent_id)
+        ssm_input = mag_gnn_out
 
         # if batch size is big, split into smaller batches, forward pass and then concatenate
         if (self.split_batch) and (obs.shape[0] > self.max_batch_size):
@@ -265,7 +271,7 @@ class MAD_Actor(nn.Module):
         # Take absolute value and clamp to prevent extreme Jacobian values
         # Clamping to [0.01, 10.0] prevents log(magnitude) from being too negative or too positive
         #magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max if self.training else self.m_max_final)
-        magnitude = ssm_out_raw.abs()#.clamp(min=0.0, max=self.m_max)
+        magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max)
        # logger.info(f'magnitude: {magnitude}')
 
         # action = u_base + |M| * tanh(y)
@@ -295,19 +301,14 @@ class MAD_Actor(nn.Module):
         agent_id,
         rnn_states,
         ssm_states,
+        disturbances,
         action,
         masks,
         available_actions=None,
         active_masks=None,
-        pre_tanh_value=None,  # Not used - kept for API compatibility
     ) -> Tuple[Tensor, Tensor]:
         """
         Compute log probability and entropy of given actions.
-
-        IMPORTANT: This method recovers y from the stored action using the current
-        magnitude M_new. This is critical for correct PPO importance sampling when
-        the magnitude changes between collection and evaluation.
-
         obs: (torch.Tensor)
             Observation inputs into network.
         node_obs (torch.Tensor):
@@ -322,6 +323,8 @@ class MAD_Actor(nn.Module):
             If RNN network, hidden states for RNN.
         ssm_states: (torch.Tensor)
             SSM hidden states for this timestep.
+        disturbances: (torch.Tensor)
+            Disturbance vector for this timestep. (batch_size, 2*dim_p)
         masks: (torch.Tensor)
             Mask tensor denoting if hidden states
             should be reinitialized to zeros.
@@ -330,8 +333,6 @@ class MAD_Actor(nn.Module):
             (if None, all actions available)
         active_masks: (torch.Tensor)
             Denotes whether an agent is active or dead.
-        pre_tanh_value: (torch.Tensor)
-            Not used - kept for API compatibility.
 
         :return action_log_probs: (torch.Tensor)
             Log probabilities under current policy.
@@ -341,10 +342,11 @@ class MAD_Actor(nn.Module):
         obs = check(obs).to(**self.tpdv)
         node_obs = check(node_obs).to(**self.tpdv)
         adj = check(adj).to(**self.tpdv)
-        agent_id = check(agent_id).to(**self.tpdv)
+        agent_id = check(agent_id).to(**self.tpdv).long()
         rnn_states = check(rnn_states).to(**self.tpdv)
         action = check(action).to(**self.tpdv)
         masks = check(masks).to(**self.tpdv)
+        disturbances = check(disturbances).to(**self.tpdv)
         if available_actions is not None:
             available_actions = check(available_actions).to(**self.tpdv)
 
@@ -396,18 +398,17 @@ class MAD_Actor(nn.Module):
                     torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
                 )
 
-        # ==================== Magnitude GNN → SSM Pipeline (Kickstart) ====================
-        # Process neighbor observations through zero-preserving GNN
-        # This preserves L_p-stability: f(0) = 0
-        mag_gnn_out = self.mag_gnn(node_obs, adj, agent_id)  # (batch_size, mag_gnn_out_dim)
+        # ==================== Magnitude GNN → SSM Pipeline ====================
+        # Process disturbances through zero-preserving GNN (preserves L_p-stability: f(0) = 0)
+        #
+        # Disturbances have the SAME shape as node_obs: (batch_size, num_nodes, node_feature_dim)
+        # At t=0: disturbances = node_obs (for SSM kickstart)
+        # At t>0: disturbances = padded actual disturbances (already padded in environment)
+        # Both use the SAME adjacency matrix to enable information sharing between agents
 
-        # SSM input: GNN output at t=0 (reset), zeros otherwise
-        # This "kickstarts" the SSM with aggregated neighbor information at episode start
-        ssm_input = torch.where(
-            reset_mask.unsqueeze(-1).expand_as(mag_gnn_out),
-            mag_gnn_out,  # At reset: use GNN-processed neighbor observations
-            torch.zeros_like(mag_gnn_out)  # Otherwise: zero input
-        )
+        # Simply pass disturbances through GNN (no branching needed!)
+        mag_gnn_out = self.mag_gnn(disturbances, adj, agent_id)
+        ssm_input = mag_gnn_out
 
         # Extract relative goal for base controller
         # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
@@ -417,7 +418,7 @@ class MAD_Actor(nn.Module):
         ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
 
         # magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max if self.training else self.m_max_final)
-        magnitude = ssm_out_raw.abs()#.clamp(min=0.0, max=self.m_max)
+        magnitude = ssm_out_raw.abs().clamp(min=0.0, max=self.m_max)
 
         # CRITICAL: Must recover y from stored action using NEW magnitude for correct PPO importance sampling
         # The stored action was: action = u_base + M_old * tanh(y_old)
@@ -452,12 +453,6 @@ class MAD_Actor(nn.Module):
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
         # Evaluate log probs of the Gaussian sample y under current policy
-        # IMPORTANT: Detach y to prevent double gradient through magnitude
-        # Gradients to magnitude should only flow through the Jacobian correction terms
-
-        # Detach to prevent conflicting gradients through y recovery
-        if not self.args.no_detach_y:
-            y = y.detach()
 
         y_log_probs, dist_entropy_y = self.act.evaluate_actions(
             actor_features,

@@ -6,6 +6,7 @@ import random
 from typing import Callable, List, Tuple, Dict, Union, Optional
 from multiagent.core import World, Agent
 from multiagent.multi_discrete import MultiDiscrete
+from onpolicy.algorithms.utils.distrubance import disturbance_process
 
 # update bounds to center around agent
 cam_range = 2
@@ -198,6 +199,14 @@ class MultiAgentBaseEnv(gym.Env):
         if self.reward_callback is None:
             return 0.0
         return self.reward_callback(agent, self.world)
+
+    def _set_disturbance(self, agent: Agent) -> None:
+        if self.world.use_disturbance:
+            w = disturbance_process(2*self.world.dim_p, self.world.current_time_step, self.world.disturbance_std, self.world.disturbance_decay_rate)
+        else:
+            w = np.zeros(2*self.world.dim_p)
+
+        agent.disturbance.w = w
 
     # set env action for a particular agent
     def _set_action(
@@ -785,15 +794,22 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
         self.current_step += 1
         obs_n, reward_n, done_n, info_n = [], [], [], []
         node_obs_n, adj_n, agent_id_n = [], [], []
+        disturbance_n = []
         self.world.current_time_step += 1
         self.agents = self.world.policy_agents
         # set action for each agent
         for i, agent in enumerate(self.agents):
             self._set_action(action_n[i], agent, self.action_space[i])
+            self._set_disturbance(agent)    # Set disturbance for each agent
+
         # advance world state
         self.world.step()
         # record observation for each agent
         for agent in self.agents:
+            # Get disturbances in graph format (same structure as node_obs)
+            disturbance_graph = self._get_disturbance_graph(agent)
+            disturbance_n.append(disturbance_graph)
+
             obs_n.append(self._get_obs(agent))
             agent_id_n.append(self._get_id(agent))
             node_obs, adj = self._get_graph_obs(agent)
@@ -812,7 +828,34 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
         if self.shared_reward:
             reward_n = [[reward]] * self.n  # NOTE this line is similar to PPOEnv
 
-        return obs_n, agent_id_n, node_obs_n, adj_n, reward_n, done_n, info_n
+        return obs_n, agent_id_n, node_obs_n, adj_n, disturbance_n, reward_n, done_n, info_n
+
+    def _get_disturbance_graph(self, agent: Agent):
+        """
+        Get disturbances in graph format (SAME shape as node_obs).
+        Returns: (num_entities, node_feature_dim) array where:
+        - For agents: their disturbance values padded with zeros
+        - For non-agents (landmarks, obstacles): all zeros
+
+        This matches node_obs structure exactly, allowing direct use in GNN.
+        """
+        # Get node_obs to determine the feature dimension
+        node_obs, _ = self._get_graph_obs(agent)
+        num_entities, node_feature_dim = node_obs.shape
+
+        # Create disturbance graph with same shape as node_obs
+        disturbance_graph = np.zeros((num_entities, node_feature_dim))
+
+        disturbance_dim = 2 * self.world.dim_p  # position and velocity disturbances
+
+        # Fill in disturbances for each entity (padded to match node_obs dimensions)
+        for i, entity in enumerate(self.world.entities):
+            if "agent" in entity.name:
+                # For agents: use their actual disturbance, padded with zeros
+                disturbance_graph[i, :disturbance_dim] = entity.disturbance.w
+            # For landmarks and obstacles: already all zeros from initialization
+
+        return disturbance_graph
 
     def reset(self) -> Tuple[List, List, List, List]:
         self.current_step = 0
@@ -823,7 +866,7 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
         # reset renderer
         self._reset_render()
         # record observations for each agent
-        obs_n, node_obs_n, adj_n, agent_id_n = [], [], [], []
+        obs_n, node_obs_n, adj_n, agent_id_n, disturbance_n = [], [], [], [], []
         self.agents = self.world.policy_agents
         for agent in self.agents:
             obs_n.append(self._get_obs(agent))
@@ -831,7 +874,11 @@ class MultiAgentGraphEnv(MultiAgentBaseEnv):
             node_obs, adj = self._get_graph_obs(agent)
             node_obs_n.append(node_obs)
             adj_n.append(adj)
-        return obs_n, agent_id_n, node_obs_n, adj_n
+            # At reset, return node_obs as "disturbances" (for SSM kickstart)
+            # This has the same shape as node_obs and will be used directly
+            disturbance_n.append(node_obs.copy())
+
+        return obs_n, agent_id_n, node_obs_n, adj_n, disturbance_n
 
     def _get_graph_obs(self, agent: Agent):
         if self.graph_observation_callback is None:

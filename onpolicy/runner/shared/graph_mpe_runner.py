@@ -66,9 +66,9 @@ class GMPERunner(Runner):
                 ) = self.collect(step)
 
                 # Obs reward and next obs
-                obs, agent_id, node_obs, adj, rewards, dones, infos = self.envs.step(
+                obs, agent_id, node_obs, adj, disturbance_n, rewards, dones, infos = self.envs.step(
                     actions_env
-                )
+                )   
 
                 #logger.info(f"Obs shape: {obs.shape}, Agent ID shape: {agent_id.shape}, Node Obs shape: {node_obs.shape}, Adj shape: {adj.shape}, RNN States shape {rnn_states.shape}")
 
@@ -77,7 +77,7 @@ class GMPERunner(Runner):
                     agent_id,
                     node_obs,
                     adj,
-                    agent_id,
+                    disturbance_n,
                     rewards,
                     dones,
                     infos,
@@ -148,7 +148,7 @@ class GMPERunner(Runner):
 
     def warmup(self):
         # reset env
-        obs, agent_id, node_obs, adj = self.envs.reset()
+        obs, agent_id, node_obs, adj, disturbances = self.envs.reset()
 
         # replay buffer
         if self.use_centralized_V:
@@ -166,12 +166,17 @@ class GMPERunner(Runner):
             share_obs = obs
             share_agent_id = agent_id
 
+        # disturbances have same shape as node_obs: (n_rollout_threads, num_agents, num_nodes, node_feature_dim)
+        # At reset, disturbances = node_obs (for SSM kickstart)
+        disturbances = np.array(disturbances)
+
         self.buffer.share_obs[0] = share_obs.copy()
         self.buffer.obs[0] = obs.copy()
         self.buffer.node_obs[0] = node_obs.copy()
         self.buffer.adj[0] = adj.copy()
         self.buffer.agent_id[0] = agent_id.copy()
         self.buffer.share_agent_id[0] = share_agent_id.copy()
+        self.buffer.disturbances[0] = disturbances.copy()  # At t=0, this is node_obs
         # Set masks[0] = 0 to indicate episode start (critical for SSM reset logic)
         self.buffer.masks[0] = np.zeros(
             (self.n_rollout_threads, self.num_agents, 1), dtype=np.float32
@@ -192,6 +197,10 @@ class GMPERunner(Runner):
         else:
             ssm_states = None
 
+        # Prepare disturbances for MAD policy
+        disturbances = np.concatenate(self.buffer.disturbances[step])
+        disturbances = torch.from_numpy(disturbances).to(self.device)
+        
         policy_output = self.trainer.policy.get_actions(
             np.concatenate(self.buffer.share_obs[step]),
             np.concatenate(self.buffer.obs[step]),
@@ -202,6 +211,7 @@ class GMPERunner(Runner):
             np.concatenate(self.buffer.rnn_states[step]),
             np.concatenate(self.buffer.rnn_states_critic[step]),
             ssm_states,
+            disturbances,
             np.concatenate(self.buffer.masks[step]),
         )
 
@@ -279,7 +289,7 @@ class GMPERunner(Runner):
             agent_id,
             node_obs,
             adj,
-            agent_id,
+            disturbances,
             rewards,
             dones,
             infos,
@@ -308,6 +318,10 @@ class GMPERunner(Runner):
             )
         masks = np.ones((self.n_rollout_threads, self.num_agents, 1), dtype=np.float32)
         masks[dones == True] = np.zeros(((dones == True).sum(), 1), dtype=np.float32)
+
+        # disturbances have same shape as node_obs (padded in environment)
+        # shape: (n_rollout_threads, num_agents, num_nodes, node_feature_dim)
+        disturbances = np.array(disturbances)
 
         # if centralized critic, then shared_obs is concatenation of obs from all agents
         if self.use_centralized_V:
@@ -342,6 +356,7 @@ class GMPERunner(Runner):
             masks,
             lru_hidden_states=ssm_states,
             pre_tanh_value=pre_tanh_value,
+            disturbances=disturbances,
         )
 
     @torch.no_grad()
@@ -362,7 +377,7 @@ class GMPERunner(Runner):
     @torch.no_grad()
     def eval(self, total_num_steps: int):
         eval_episode_rewards = []
-        eval_obs, eval_agent_id, eval_node_obs, eval_adj = self.eval_envs.reset()
+        eval_obs, eval_agent_id, eval_node_obs, eval_adj, eval_disturbances = self.eval_envs.reset()
 
         eval_rnn_states = np.zeros(
             (self.n_eval_rollout_threads, *self.buffer.rnn_states.shape[2:]),
@@ -455,6 +470,7 @@ class GMPERunner(Runner):
                 eval_agent_id,
                 eval_node_obs,
                 eval_adj,
+                eval_disturbances,
                 eval_rewards,
                 eval_dones,
                 eval_infos,
@@ -510,7 +526,7 @@ class GMPERunner(Runner):
         )
 
         for episode in range(self.all_args.render_episodes):
-            obs, agent_id, node_obs, adj = envs.reset()
+            obs, agent_id, node_obs, adj, disturbances = envs.reset()
             if not get_metrics:
                 if self.all_args.save_gifs:
                     image = envs.render("rgb_array")[0][0]
@@ -608,7 +624,7 @@ class GMPERunner(Runner):
                     )
 
                 # Obser reward and next obs
-                obs, agent_id, node_obs, adj, rewards, dones, infos = envs.step(
+                obs, agent_id, node_obs, adj, disturbances, rewards, dones, infos = envs.step(
                     actions_env
                 )
                 episode_rewards.append(rewards)

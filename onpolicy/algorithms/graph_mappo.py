@@ -137,21 +137,30 @@ class GR_MAPPO():
                 importance sampling weights.
         """
         # Handle both standard and MAD policy (MAD has extra lru_hidden_states and pre_tanh_value)
-        if len(sample) == 18:
-            # Policy with LRU hidden states and pre_tanh_value
+        if len(sample) == 19:
+            # MAD policy with LRU hidden states, pre_tanh_value, and disturbances
+            share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
+            share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
+            actions_batch, value_preds_batch, return_batch, masks_batch, \
+            active_masks_batch, old_action_log_probs_batch, adv_targ, \
+            available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch, disturbances_batch = sample
+        elif len(sample) == 18:
+            # Policy with LRU hidden states and pre_tanh_value (no disturbances)
             share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
             share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
             actions_batch, value_preds_batch, return_batch, masks_batch, \
             active_masks_batch, old_action_log_probs_batch, adv_targ, \
             available_actions_batch, lru_hidden_states_batch, pre_tanh_value_batch = sample
+            disturbances_batch = None
         elif len(sample) == 17:
-            # MAD policy with LRU hidden states
+            # MAD policy with LRU hidden states (no pre_tanh or disturbances)
             share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
             share_agent_id_batch, rnn_states_batch, rnn_states_critic_batch, \
             actions_batch, value_preds_batch, return_batch, masks_batch, \
             active_masks_batch, old_action_log_probs_batch, adv_targ, \
             available_actions_batch, lru_hidden_states_batch = sample
             pre_tanh_value_batch = None
+            disturbances_batch = None
         else:
             # Standard policy
             share_obs_batch, obs_batch, node_obs_batch, adj_batch, agent_id_batch, \
@@ -161,44 +170,53 @@ class GR_MAPPO():
             available_actions_batch = sample
             lru_hidden_states_batch = None
             pre_tanh_value_batch = None
+            disturbances_batch = None
 
         old_action_log_probs_batch = check(old_action_log_probs_batch).to(**self.tpdv)
         adv_targ = check(adv_targ).to(**self.tpdv)
         value_preds_batch = check(value_preds_batch).to(**self.tpdv)
         return_batch = check(return_batch).to(**self.tpdv)
         active_masks_batch = check(active_masks_batch).to(**self.tpdv)
-        # print("MaPPO", active_masks_batch.T)
-        # Reshape to do in a single forward pass for all steps
-        # values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
-        #                                                 share_obs_batch,
-        #                                                 obs_batch,
-        #                                                 node_obs_batch,
-        #                                                 adj_batch,
-        #                                                 agent_id_batch,
-        #                                                 share_agent_id_batch,
-        #                                                 rnn_states_batch,
-        #                                                 rnn_states_critic_batch,
-        #                                                 actions_batch,
-        #                                                 masks_batch,
-        #                                                 available_actions_batch,
-        #                                                 active_masks_batch,
-        #                                                 lru_hidden_states_batch)
-        values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
-                                                        share_obs_batch,
-                                                        obs_batch,
-                                                        node_obs_batch,
-                                                        adj_batch,
-                                                        agent_id_batch,
-                                                        share_agent_id_batch,
-                                                        rnn_states_batch,
-                                                        rnn_states_critic_batch,
-                                                        actions_batch,
-                                                        masks_batch,
-                                                        available_actions_batch,
-                                                        active_masks_batch,
-                                                        lru_hidden_states_batch,
-                                                        pre_tanh_value_batch
-                                                        )
+
+        # Call policy.evaluate_actions with appropriate signature
+        # MAD policy has disturbances parameter, regular policy does not
+        if disturbances_batch is not None:
+            # MAD policy: includes disturbances between rnn_states_critic and action
+            values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
+                                                            share_obs_batch,
+                                                            obs_batch,
+                                                            node_obs_batch,
+                                                            adj_batch,
+                                                            agent_id_batch,
+                                                            share_agent_id_batch,
+                                                            rnn_states_batch,
+                                                            rnn_states_critic_batch,
+                                                            disturbances_batch,
+                                                            actions_batch,
+                                                            masks_batch,
+                                                            available_actions_batch,
+                                                            active_masks_batch,
+                                                            lru_hidden_states_batch,
+                                                            pre_tanh_value_batch
+                                                            )
+        else:
+            # Regular policy: no disturbances parameter
+            values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
+                                                            share_obs_batch,
+                                                            obs_batch,
+                                                            node_obs_batch,
+                                                            adj_batch,
+                                                            agent_id_batch,
+                                                            share_agent_id_batch,
+                                                            rnn_states_batch,
+                                                            rnn_states_critic_batch,
+                                                            actions_batch,
+                                                            masks_batch,
+                                                            available_actions_batch,
+                                                            active_masks_batch,
+                                                            lru_hidden_states_batch,
+                                                            pre_tanh_value_batch
+                                                            )
         # actor update
         # print(f'obs: {obs_batch.shape}')
         # st = time.time()

@@ -7,6 +7,7 @@ import setproctitle
 import numpy as np
 from pathlib import Path
 import torch
+import yaml
 
 import os, sys
 
@@ -250,6 +251,12 @@ def main(args):
         run_dir = run_dir / curr_run
         if not run_dir.exists():
             os.makedirs(str(run_dir))
+
+    # Save config to YAML file for reproducibility
+    config_path = run_dir / "config.yaml"
+    with open(str(config_path), "w") as f:
+        yaml.dump(vars(all_args), f, default_flow_style=False, sort_keys=True)
+    print(f"Config saved to {config_path}")
 
     setproctitle.setproctitle(
         str(all_args.algorithm_name)
