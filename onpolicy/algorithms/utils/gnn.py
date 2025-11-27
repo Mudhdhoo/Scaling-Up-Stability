@@ -137,15 +137,22 @@ class EmbedConv(MessagePassing):
             node_feat = torch.cat([node_feat_j, entity_embed_j, edge_attr], dim=1)
         else:
             node_feat = torch.cat([node_feat_j, entity_embed_j], dim=1)
+
+        # NUMERICAL STABILITY FIX: Clamp input features to prevent explosion
+        node_feat = torch.clamp(node_feat, min=-10.0, max=10.0)
+
         # Apply the first linear layer
         x = self.lin1(node_feat)
         x = self.active_func(x)
         x = self.layer_norm(x)
-        
-        # Apply the hidden layers
+
+        # Apply the hidden layers with activation clamping
         for layer in self.layers:
             x = layer(x)
-        
+            # Clamp after each layer to prevent gradient explosion
+            if isinstance(layer, nn.Linear):
+                x = torch.clamp(x, min=-10.0, max=10.0)
+
         return x
 
 
@@ -249,12 +256,12 @@ class TransformerConvNet(nn.Module):
                             add_self_loop=embed_add_self_loop,
                             edge_dim=edge_dim)
        # First transformer conv layer
-        self.gnn1 = TransformerConv(in_channels=embed_hidden_size, 
+        self.gnn1 = TransformerConv(in_channels=embed_hidden_size,
                                     out_channels=hidden_size,
-                                    heads=num_heads, 
+                                    heads=num_heads,
                                     concat=concat_heads,
-                                    beta=False,
-                                    dropout=0.0, 
+                                    beta=True,  # STABILITY FIX: Enable learned skip connections
+                                    dropout=0.1,  # STABILITY FIX: Add dropout regularization
                                     edge_dim=edge_dim,
                                     bias=True,
                                     root_weight=True)
@@ -270,8 +277,10 @@ class TransformerConvNet(nn.Module):
             self.gnn2.append(TransformerConv(in_channels=in_channels,
                                                out_channels=hidden_size,
                                                heads=self.num_heads,
-                                               concat=self.concat_heads,beta=False, dropout=0.0,
-                                            edge_dim=self.edge_dim, root_weight=True, bias=True))
+                                               concat=self.concat_heads,
+                                               beta=True,  # STABILITY FIX: Enable learned skip connections
+                                               dropout=0.1,  # STABILITY FIX: Add dropout regularization
+                                               edge_dim=self.edge_dim, root_weight=True, bias=True))
         self.activation = nn.ReLU() if use_ReLU else nn.Tanh()
     
     def forward(self, batch):
@@ -289,11 +298,23 @@ class TransformerConvNet(nn.Module):
         """
 
         x, edge_index, edge_attr = batch.x, batch.edge_index, batch.edge_attr
+
+        # NUMERICAL STABILITY FIX: Clamp input to prevent explosion
+        x = torch.clamp(x, min=-10.0, max=10.0)
+
         x = self.embed_layer(x, edge_index, edge_attr)
+
+        # Clamp after embed layer
+        x = torch.clamp(x, min=-10.0, max=10.0)
+
         # forward pass through first transfomerConv
         x = self.activation(self.gnn1(x, edge_index, edge_attr))
+        x = torch.clamp(x, min=-10.0, max=10.0)  # Clamp after activation
+
         for gnn in self.gnn2:
             x = self.activation(gnn(x, edge_index, edge_attr))
+            x = torch.clamp(x, min=-10.0, max=10.0)  # Clamp after each layer
+
         if self.graph_aggr == 'node':
             return x
         elif self.graph_aggr == 'global':
@@ -652,13 +673,19 @@ class ZeroPreservingConv(MessagePassing):
         # DO NOT use edge_attr - it breaks zero-preservation
         node_feat = x_j
 
+        # NUMERICAL STABILITY FIX: Clamp input features (preserves zero-preservation)
+        node_feat = torch.clamp(node_feat, min=-10.0, max=10.0)
+
         # Apply first linear layer
         x = self.lin1(node_feat)
         x = self.active_func(x)
 
-        # Apply hidden layers
+        # Apply hidden layers with activation clamping
         for layer in self.layers:
             x = layer(x)
+            # Clamp after each linear layer to prevent gradient explosion
+            if isinstance(layer, nn.Linear):
+                x = torch.clamp(x, min=-10.0, max=10.0)
 
         return x
 
@@ -711,10 +738,10 @@ class ZeroPreservingTransformerConvNet(nn.Module):
             out_channels=hidden_size,
             heads=num_heads,
             concat=concat_heads,
-            beta=False,
-            dropout=0.0,
+            beta=True,  # STABILITY FIX: Safe for zero-preservation (beta*0 = 0)
+            dropout=0.1,  # STABILITY FIX: Safe for zero-preservation (dropout(0) = 0)
             edge_dim=None,
-            bias=False,  # NO BIAS
+            bias=False,  # NO BIAS (required for zero-preservation)
             root_weight=True
         )
         # Manually disable internal biases for zero-preservation
@@ -728,11 +755,11 @@ class ZeroPreservingTransformerConvNet(nn.Module):
                 out_channels=hidden_size,
                 heads=self.num_heads,
                 concat=self.concat_heads,
-                beta=False,
-                dropout=0.0,
+                beta=True,  # STABILITY FIX: Safe for zero-preservation (beta*0 = 0)
+                dropout=0.1,  # STABILITY FIX: Safe for zero-preservation (dropout(0) = 0)
                 edge_dim=None,
                 root_weight=True,
-                bias=False  # NO BIAS
+                bias=False  # NO BIAS (required for zero-preservation)
             )
             # Manually disable internal biases for zero-preservation
             self._disable_transformer_biases(layer)
@@ -759,10 +786,21 @@ class ZeroPreservingTransformerConvNet(nn.Module):
     
     def forward(self, batch):
         x, edge_index, edge_attr = batch.x, batch.edge_index, batch.edge_attr
+
+        # NUMERICAL STABILITY FIX: Clamp input (preserves zero-preservation)
+        x = torch.clamp(x, min=-10.0, max=10.0)
+
         x = self.embed_layer(x, edge_index, edge_attr)
+
+        # Clamp after embed layer
+        x = torch.clamp(x, min=-10.0, max=10.0)
+
         x = self.activation(self.gnn1(x, edge_index, edge_attr))
+        x = torch.clamp(x, min=-10.0, max=10.0)  # Clamp after activation
+
         for gnn in self.gnn2:
             x = self.activation(gnn(x, edge_index, edge_attr))
+            x = torch.clamp(x, min=-10.0, max=10.0)  # Clamp after each layer
 
         if self.graph_aggr == 'node':
             return x

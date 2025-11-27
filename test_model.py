@@ -104,7 +104,7 @@ env = MultiAgentGraphEnv(world=world, reset_callback=scenario.reset_world,
 policy = MAD_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 #policy = GR_MAPPOPolicy(all_args, env.observation_space[0], env.share_observation_space[0], env.node_observation_space[0], env.edge_observation_space[0], env.action_space[0])
 
-model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy_relu/run2/models/actor.pt"
+model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/mad_policy_relu/run4/models/actor.pt"
 #model_path = "/Users/johncao/Documents/Programming/Oxford/InforMARL/onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run42/models/actor.pt"
 
 model_loaded = torch.load(model_path)
