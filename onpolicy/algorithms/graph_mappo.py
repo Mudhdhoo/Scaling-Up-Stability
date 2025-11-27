@@ -50,7 +50,14 @@ class GR_MAPPO():
         self._use_valuenorm = args.use_valuenorm
         self._use_value_active_masks = args.use_value_active_masks
         self._use_policy_active_masks = args.use_policy_active_masks
-        self.scaler = amp.GradScaler() 
+
+        # Disable AMP if using MAD policy (contains complex-valued SSM states)
+        self._use_amp = not getattr(args, 'use_mad_policy', False)
+        if self._use_amp:
+            self.scaler = torch.amp.GradScaler('cuda')
+        else:
+            self.scaler = None
+
         assert (self._use_popart and self._use_valuenorm) == False, ("self._use_popart and self._use_valuenorm can not be set True simultaneously")
         
         if self._use_popart:
@@ -110,17 +117,17 @@ class GR_MAPPO():
             value_loss = value_loss.mean()
 
         return value_loss
-    @torch.cuda.amp.autocast()
-    def ppo_update(self, 
-                sample:Tuple, 
-                update_actor:bool=True) -> Tuple[Tensor, Tensor, 
-                                                Tensor, Tensor, 
+
+    def ppo_update(self,
+                sample:Tuple,
+                update_actor:bool=True) -> Tuple[Tensor, Tensor,
+                                                Tensor, Tensor,
                                                 Tensor, Tensor]:
         """
             Update actor and critic networks.
-            sample: (Tuple) 
+            sample: (Tuple)
                 contains data batch with which to update networks.
-            update_actor: (bool) 
+            update_actor: (bool)
                 whether to update actor network.
 
             :return value_loss: (torch.Tensor) 
@@ -178,23 +185,44 @@ class GR_MAPPO():
         return_batch = check(return_batch).to(**self.tpdv)
         active_masks_batch = check(active_masks_batch).to(**self.tpdv)
 
-        values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
-                                                        share_obs_batch,
-                                                        obs_batch,
-                                                        node_obs_batch,
-                                                        adj_batch,
-                                                        agent_id_batch,
-                                                        share_agent_id_batch,
-                                                        rnn_states_batch,
-                                                        rnn_states_critic_batch,
-                                                        disturbances_batch,
-                                                        actions_batch,
-                                                        masks_batch,
-                                                        available_actions_batch,
-                                                        active_masks_batch,
-                                                        lru_hidden_states_batch,
-                                                        pre_tanh_value_batch
-                                                        )
+        # Use AMP context if enabled
+        if self._use_amp:
+            with torch.amp.autocast('cuda'):
+                values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
+                                                                share_obs_batch,
+                                                                obs_batch,
+                                                                node_obs_batch,
+                                                                adj_batch,
+                                                                agent_id_batch,
+                                                                share_agent_id_batch,
+                                                                rnn_states_batch,
+                                                                rnn_states_critic_batch,
+                                                                disturbances_batch,
+                                                                actions_batch,
+                                                                masks_batch,
+                                                                available_actions_batch,
+                                                                active_masks_batch,
+                                                                lru_hidden_states_batch,
+                                                                pre_tanh_value_batch
+                                                                )
+        else:
+            values, action_log_probs, dist_entropy = self.policy.evaluate_actions(
+                                                            share_obs_batch,
+                                                            obs_batch,
+                                                            node_obs_batch,
+                                                            adj_batch,
+                                                            agent_id_batch,
+                                                            share_agent_id_batch,
+                                                            rnn_states_batch,
+                                                            rnn_states_critic_batch,
+                                                            disturbances_batch,
+                                                            actions_batch,
+                                                            masks_batch,
+                                                            available_actions_batch,
+                                                            active_masks_batch,
+                                                            lru_hidden_states_batch,
+                                                            pre_tanh_value_batch
+                                                            )
 
         # actor update
         # print(f'obs: {obs_batch.shape}')
@@ -222,21 +250,29 @@ class GR_MAPPO():
         st = time.time()
 
         if update_actor:
-            # (policy_loss - dist_entropy * self.entropy_coef).backward()
-            self.scaler.scale((policy_loss - dist_entropy * self.entropy_coef)).backward()
+            if self._use_amp:
+                self.scaler.scale((policy_loss - dist_entropy * self.entropy_coef)).backward()
+            else:
+                (policy_loss - dist_entropy * self.entropy_coef).backward()
+
         critic_backward_time = time.time() - st
         # print(f'Actor Backward time: {critic_backward_time}')
         # st = time.time()
-        self.scaler.unscale_(self.policy.actor_optimizer)
+
+        if self._use_amp:
+            self.scaler.unscale_(self.policy.actor_optimizer)
+
         if self._use_max_grad_norm:
             actor_grad_norm = nn.utils.clip_grad_norm_(
-                                            self.policy.actor.parameters(), 
+                                            self.policy.actor.parameters(),
                                             self.max_grad_norm)
         else:
             actor_grad_norm = get_grad_norm(self.policy.actor.parameters())
 
-        # self.policy.actor_optimizer.step()
-        self.scaler.step(self.policy.actor_optimizer) #.step()
+        if self._use_amp:
+            self.scaler.step(self.policy.actor_optimizer)
+        else:
+            self.policy.actor_optimizer.step()
         # print(f'Actor Step time: {time.time() - st}')
         # st = time.time()
 
@@ -249,25 +285,34 @@ class GR_MAPPO():
 
         self.policy.critic_optimizer.zero_grad()
         # print(f'Critic Zero grad time: {time.time() - st}')
-        
+
         st = time.time()
         critic_loss = (value_loss * self.value_loss_coef)   # TODO add gradient accumulation here
-        # critic_loss.backward()
-        self.scaler.scale(critic_loss).backward()
+
+        if self._use_amp:
+            self.scaler.scale(critic_loss).backward()
+        else:
+            critic_loss.backward()
+
         actor_backward_time = time.time() - st
         # print(f'Critic Backward time: {actor_backward_time}')
         # st = time.time()
-        self.scaler.unscale_(self.policy.critic_optimizer)
+
+        if self._use_amp:
+            self.scaler.unscale_(self.policy.critic_optimizer)
+
         if self._use_max_grad_norm:
             critic_grad_norm = nn.utils.clip_grad_norm_(
-                                                self.policy.critic.parameters(), 
+                                                self.policy.critic.parameters(),
                                                 self.max_grad_norm)
         else:
             critic_grad_norm = get_grad_norm(self.policy.critic.parameters())
 
-        # self.policy.critic_optimizer.step()
-        self.scaler.step(self.policy.critic_optimizer) #.step()
-        self.scaler.update()
+        if self._use_amp:
+            self.scaler.step(self.policy.critic_optimizer)
+            self.scaler.update()
+        else:
+            self.policy.critic_optimizer.step()
         # print(f'Critic Step time: {time.time() - st}')
         # print('_'*50)
 
