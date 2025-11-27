@@ -50,13 +50,7 @@ class GR_MAPPO():
         self._use_valuenorm = args.use_valuenorm
         self._use_value_active_masks = args.use_value_active_masks
         self._use_policy_active_masks = args.use_policy_active_masks
-
-        # Disable AMP gradient scaling when using MAD policy (complex tensors not supported)
-        use_mad = getattr(args, 'use_mad_policy', False)
-        self.scaler = amp.GradScaler(enabled=not use_mad)
-        if use_mad:
-            print("INFO: Automatic Mixed Precision (AMP) disabled for MAD policy (complex SSM states not supported)")
-
+        self.scaler = amp.GradScaler() 
         assert (self._use_popart and self._use_valuenorm) == False, ("self._use_popart and self._use_valuenorm can not be set True simultaneously")
         
         if self._use_popart:

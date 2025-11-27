@@ -29,9 +29,9 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --env_name "GraphMPE" \
 --algorithm_name "rmappo" \
 --seed 0 \
---experiment_name "mad_policy_10_agents" \
+--experiment_name "mad_policy_7_agents" \
 --scenario_name "navigation_graph" \
---num_agents 10 \
+--num_agents 3 \
 --collision_rew 5 \
 --n_training_threads 1 --n_rollout_threads 128 \
 --num_mini_batch 1 \

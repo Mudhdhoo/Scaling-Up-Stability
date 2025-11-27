@@ -271,7 +271,8 @@ class MAD_Actor(nn.Module):
         # softplus(x) - log(2) ensures f(0) = 0 while maintaining differentiability everywhere
         # Unlike ReLU (gradient=0 for x<0), this learns from ALL samples (gradient always > 0)
         # This preserves L_p-stability: when disturbances=0, magnitude=0
-        magnitude = (torch.nn.functional.softplus(ssm_out_raw) - math.log(2.0)).clamp(min=1e-6, max=self.m_max)
+        # magnitude = (torch.nn.functional.softplus(ssm_out_raw) - math.log(2.0)).clamp(min=1e-6, max=self.m_max)
+        magnitude = (torch.nn.functional.relu(ssm_out_raw)).clamp(min=1e-6, max=self.m_max)
        # logger.info(f'magnitude: {magnitude}')
 
         # action = u_base + |M| * tanh(y)
@@ -420,7 +421,8 @@ class MAD_Actor(nn.Module):
         # Use shifted softplus for L_p-stability (zero-preserving) AND smooth gradients
         # softplus(x) - log(2) ensures f(0) = 0 while maintaining differentiability everywhere
         # Unlike ReLU (gradient=0 for x<0), this learns from ALL samples (gradient always > 0)
-        magnitude = (torch.nn.functional.softplus(ssm_out_raw) - math.log(2.0)).clamp(min=1e-6, max=self.m_max)
+      #  magnitude = (torch.nn.functional.softplus(ssm_out_raw) - math.log(2.0)).clamp(min=1e-6, max=self.m_max)
+        magnitude = (torch.nn.functional.relu(ssm_out_raw)).clamp(min=1e-6, max=self.m_max)
 
         # CRITICAL: Must recover y from stored action using NEW magnitude for correct PPO importance sampling
         # The stored action was: action = u_base + M_old * tanh(y_old)
