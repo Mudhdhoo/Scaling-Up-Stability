@@ -100,15 +100,9 @@ class MLPBase(nn.Module):
         )
 
     def forward(self, x: torch.tensor):
-        # NUMERICAL STABILITY FIX: Clamp input
-        x = torch.clamp(x, min=-10.0, max=10.0)
-
         if self._use_feature_normalization:
             x = self.feature_norm(x)
 
         x = self.mlp(x)
-
-        # NUMERICAL STABILITY FIX: Clamp output to prevent NaN propagation
-        x = torch.clamp(x, min=-10.0, max=10.0)
 
         return x

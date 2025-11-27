@@ -129,24 +129,13 @@ class DiagGaussian(nn.Module):
         self.logstd = AddBias(torch.zeros(num_outputs))
 
     def forward(self, x: torch.tensor):
-        # NUMERICAL STABILITY FIX: Clamp input to prevent explosion
-        x = torch.clamp(x, min=-10.0, max=10.0)
-
         action_mean = self.fc_mean(x)
-
-        # NUMERICAL STABILITY FIX: Clamp action_mean to prevent NaN
-        action_mean = torch.clamp(action_mean, min=-10.0, max=10.0)
 
         zeros = torch.zeros(action_mean.size())
         if x.is_cuda:
             zeros = zeros.cuda()
 
         action_logstd = self.logstd(zeros)
-
-        # NUMERICAL STABILITY FIX: Clamp log std to prevent exp() overflow
-        # exp(-10) ≈ 4.5e-5, exp(2) ≈ 7.4 gives reasonable std range
-        action_logstd = torch.clamp(action_logstd, min=-10.0, max=2.0)
-
         return FixedNormal(action_mean, action_logstd.exp())
 
 
