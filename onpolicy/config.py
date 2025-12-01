@@ -768,7 +768,7 @@ def graph_config(args, parser):
     parser.add_argument(
         "--kp_val",
         type=float,
-        default=1.0,
+        default=0.5,
         help="Initial value for learnable proportional gains in the base controller",
     )
 
