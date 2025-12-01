@@ -7,7 +7,7 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --seed 0 \
 --experiment_name "informarl" \
 --scenario_name "navigation_graph" \
---num_agents 3 \
+--num_agents 7 \
 --collision_rew 5 \
 --n_training_threads 1 --n_rollout_threads 128 \
 --num_mini_batch 1 \
@@ -29,9 +29,9 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --env_name "GraphMPE" \
 --algorithm_name "rmappo" \
 --seed 0 \
---experiment_name "mad_policy_7_agents" \
+--experiment_name "mad_policy_5_agents" \
 --scenario_name "navigation_graph" \
---num_agents 3 \
+--num_agents 5 \
 --collision_rew 5 \
 --n_training_threads 1 --n_rollout_threads 128 \
 --num_mini_batch 1 \
@@ -63,7 +63,7 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --seed 0 \
 --experiment_name "informarl" \
 --scenario_name "navigation_graph" \
---num_agents 10 \
+--num_agents 3 \
 --collision_rew 5 \
 --n_training_threads 1 --n_rollout_threads 128 \
 --num_mini_batch 1 \
@@ -73,5 +73,6 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --user_name "marl" \
 --use_cent_obs "False" \
 --graph_feat_type "relative" \
---auto_mini_batch_size --target_mini_batch_size 128 \
---use_wandb "False" 
+--auto_mini_batch_size --target_mini_batch_size 128 \ 
+--use_wandb "False" \
+

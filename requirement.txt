@@ -18,3 +18,7 @@ tqdm
 typing
 typing-extensions
 wandb
+setproctitle
+imageio
+loguru
+
