@@ -9,8 +9,8 @@ requests
 tensorboard
 tensorboard-plugin-wit
 tensorboardX
-torch-cluster
 torch-geometric
+torch-cluster
 torch-scatter
 torch-sparse
 torch-spline-conv
