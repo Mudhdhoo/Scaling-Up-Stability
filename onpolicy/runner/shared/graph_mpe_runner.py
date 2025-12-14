@@ -35,18 +35,6 @@ class GMPERunner(Runner):
 
         logger.info(f"Running {episodes} episodes")
 
-        # Initialize m_max scheduling for MAD policy
-        if self.all_args.use_mad_policy:
-            if self.all_args.m_schedule_type == "step":
-                # Step scheduler: start at m_max_start, step to m_max_final at specified episod
-                logger.info(f"m_max step scheduler enabled: {self.all_args.m_max_start} -> {self.all_args.m_max_final} at episode {self.all_args.m_max_step_episode}")
-            elif self.all_args.m_schedule_type == "linear":
-                # Linear warmup: gradually increase from m_max_start to m_max_final
-                logger.info(f"m_max linear warmup enabled: {self.all_args.m_max_start} -> {self.all_args.m_max_final} over {self.all_args.m_max_warmup_episodes} episodes")
-            elif self.all_args.m_schedule_type == "none":
-                # No scheduling: use m_max_start
-                logger.info(f"m_max constant scheduler enabled: {self.all_args.m_max_start}")
-
         # This is where the episodes are actually run.
         for episode in range(episodes):
             if self.use_linear_lr_decay:
@@ -101,25 +89,6 @@ class GMPERunner(Runner):
             total_num_steps = (
                 (episode + 1) * self.episode_length * self.n_rollout_threads
             )
-
-            # Update m_max AFTER training for next iteration (ensures rollout and eval use same m_max)
-            if self.all_args.use_mad_policy and self.all_args.m_schedule_type != "none":
-                if self.all_args.m_schedule_type == "step":
-                    # Step scheduler: jump to m_max_final at specified episode
-                    if episode >= self.all_args.m_max_step_episode:
-                        new_m_max = self.all_args.m_max_final
-                    else:
-                        new_m_max = self.all_args.m_max_start
-                    self.trainer.policy.actor.m_max = new_m_max
-                    train_infos["m_max"] = new_m_max
-                elif self.all_args.m_schedule_type == "linear":
-                    # Linear warmup: gradually increase
-                    progress = min(1.0, episode / self.all_args.m_max_warmup_episodes)
-                    new_m_max = self.all_args.m_max_start + progress * (self.all_args.m_max_final - self.all_args.m_max_start)
-                    self.trainer.policy.actor.m_max = new_m_max
-                    train_infos["m_max"] = new_m_max
-
-                logger.info(f"m_max step scheduler: {new_m_max}")
 
             # save model
             if episode % self.save_interval == 0 or episode == episodes - 1:

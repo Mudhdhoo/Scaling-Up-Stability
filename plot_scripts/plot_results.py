@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
 """
-Script to plot average episode rewards from TensorBoard event files.
-Automatically discovers all runs in results_mad and results_informarl folders.
+Script to plot figure 2 in the paper.
 """
 
 import os
@@ -140,22 +138,19 @@ def plot_results(event_files, output_file='training_results.png', smooth_window=
         'mad': '#2ecc71',  # Green
         'informarl': '#9b59b6',  # Violet
         'mappo': '#3498db',  # Blue
-        'p_controller': '#e74c3c',  # Red
     }
 
-    # Nice names for legend
     method_names = {
         'mad': 'Ours',
         'informarl': 'InforMARL',
-        'mappo': 'MAPPO',
-        'p_controller': 'P Controller',
+        'mappo': 'MAPPO'
     }
 
     # Group data by method
     data_by_method = defaultdict(list)
 
     for method_name, seed_num, run_num, file_path in event_files:
-        print(f"Loading: {method_name}, seed {seed_num}, run {run_num}")
+        print(f"Loading: {method_name}, seed {seed_num}")
         steps, values = load_tensorboard_data(file_path)
 
         if steps is not None and values is not None and len(values) > 0:
@@ -280,7 +275,7 @@ def plot_results(event_files, output_file='training_results.png', smooth_window=
 def main():
     """Main function to run the plotting script."""
     # Define base directories to search
-    base_dirs = ['results_mad', 'results_informarl', 'results_p_controller']
+    base_dirs = ['results_mad', 'results_informarl']
 
     print("Searching for TensorBoard event files...")
     event_files = find_event_files(base_dirs)

@@ -82,17 +82,9 @@ class Runner(object):
 
         if self.all_args.env_name == "GraphMPE":
             if self.all_args.use_mad_policy:
-                logger.info("Using MAD policy")
+                logger.info("Using Stable GNN policy")
                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
                 from onpolicy.algorithms.mad_MAPPOPolicy import MAD_MAPPOPolicy as Policy
-            elif self.all_args.use_gnn_plus_base:
-                 logger.info("Using GNN plus base policy")
-                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
-                 from onpolicy.algorithms.graph_base_policy import GR_BASE_MAPPO_Policy as Policy
-            elif self.all_args.use_ssm_plus_base:
-                 logger.info("Using SSM plus base policy")
-                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
-                 from onpolicy.algorithms.graph_base_ssm_policy import GraphBaseSSMPolicy as Policy
             else:
                 logger.info("Using InforMARL")
                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
@@ -106,11 +98,7 @@ class Runner(object):
             share_observation_space = self.envs.share_observation_space[0]
         else:
             share_observation_space = self.envs.observation_space[0]
-        logger.info(self.envs.observation_space[0])
-        logger.info(share_observation_space)
-        logger.info(self.envs.node_observation_space[0])
-        logger.info(self.envs.edge_observation_space[0])
-        logger.info(self.envs.action_space[0])
+
         # policy network
         if self.all_args.env_name == "GraphMPE":
             self.policy = Policy(

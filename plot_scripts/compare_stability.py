@@ -1,10 +1,5 @@
 """
-Compare stability of MAD policy vs InforMARL policy.
-Simple script showing MAD converges to goal states while InforMARL does not.
-Tracks the norm of state errors ||[e^0, ..., e^N]|| where:
-  - e^i = [rel_goal_x, rel_goal_y, vx, vy] (error for agent i)
-  - rel_goal = goal - current_pos (should converge to [0, 0])
-  - vel = [vx, vy] (should converge to [0, 0])
+Script to generate figure 1 in the paper.
 """
 
 import sys
@@ -44,12 +39,8 @@ def parse_args(args, parser):
 
 
 def run_episode(env, policy, max_steps):
-    """Run episode and return state-goal error norms over time.
-
-    Returns trajectory of ||[e^0, ..., e^N]|| where:
-        e^i = [rel_goal_x, rel_goal_y, vx, vy] (error for agent i)
-        rel_goal = goal - current_pos (from observation, should converge to 0)
-        vel = [vx, vy] (current velocity, should converge to 0)
+    """
+    Run episode and return state-goal error norms over time.
     """
     reset_output = env.reset()
     if len(reset_output) == 5:
