@@ -574,23 +574,9 @@ class GNNBase(nn.Module):
             agent_id = agent_id.long()  # Ensure agent_id is long tensor
             x = x.gather(1, agent_id.unsqueeze(-1).expand(-1, -1, x.size(-1))).squeeze(1)
         return x
-    
-    # @property
-    # def out_dim(self):
-    # 	return self.hidden_size + (self.heads-1)*self.concat*(self.hidden_size)
 
-# ============================================================================
-# Zero-Preserving GNN for MAD Policy Magnitude Term
-# ============================================================================
-# These classes ensure that zero input produces zero output, which is critical
-# for L_p-stability of the SSM in the magnitude pathway.
-# Key differences from regular GNN:
-#   1. NO entity embeddings (embeddings produce non-zero for zero input)
-#   2. bias=False everywhere (biases break zero-preservation)
-#   3. NO LayerNorm with learnable parameters (affine params break zero-preservation)
-# ============================================================================
 
-class ZeroPreservingConv(MessagePassing):
+class StableConv(MessagePassing):
     """
     Zero-preserving message passing layer for magnitude pathway.
     Identical to EmbedConv but without entity embeddings, biases, or LayerNorm.
@@ -603,7 +589,7 @@ class ZeroPreservingConv(MessagePassing):
                 use_ReLU: bool,
                 add_self_loop: bool,
                 edge_dim: Optional[int] = None):
-        super(ZeroPreservingConv, self).__init__(aggr='add')
+        super(StableConv, self).__init__(aggr='add')
         self._layer_N = layer_N
         self._add_self_loops = add_self_loop
         self.active_func = nn.ReLU() if use_ReLU else nn.Tanh()
@@ -663,7 +649,7 @@ class ZeroPreservingConv(MessagePassing):
         return x
 
 
-class ZeroPreservingTransformerConvNet(nn.Module):
+class StableTransformerConvNet(nn.Module):
     """
     Zero-preserving Transformer GNN for magnitude pathway.
     Uses ZeroPreservingConv instead of EmbedConv and bias=False everywhere.
@@ -685,7 +671,7 @@ class ZeroPreservingTransformerConvNet(nn.Module):
                 max_edge_dist: float,
                 edge_dim: int = 1):
 
-        super(ZeroPreservingTransformerConvNet, self).__init__()
+        super(StableTransformerConvNet, self).__init__()
         self.active_func = nn.ReLU() if use_ReLU else nn.Tanh()
         self.num_heads = num_heads
         self.concat_heads = concat_heads
@@ -695,7 +681,7 @@ class ZeroPreservingTransformerConvNet(nn.Module):
         self.global_aggr_type = global_aggr_type
 
         # Use ZeroPreservingConv (NO entity embeddings!)
-        self.embed_layer = ZeroPreservingConv(
+        self.embed_layer = StableConv(
             input_dim=input_dim,  # Use full input_dim (no -1 for entity type)
             hidden_size=embed_hidden_size,
             layer_N=embed_layer_N,
@@ -776,22 +762,22 @@ class ZeroPreservingTransformerConvNet(nn.Module):
         raise ValueError(f"Invalid graph_aggr: {self.graph_aggr}")
 
 
-class ZeroPreservingGNNBase(nn.Module):
+class StableGNNBase(nn.Module):
     """
-    Zero-preserving GNN wrapper for MAD magnitude pathway.
+    Stable GNN wrapper for MAD magnitude pathway.
     Ensures f(0) = 0 for L_p-stability of the SSM.
     """
     def __init__(self, args: argparse.Namespace,
                 node_obs_shape: Union[List, Tuple],
                 edge_dim: int, graph_aggr: str):
-        super(ZeroPreservingGNNBase, self).__init__()
+        super(StableGNNBase, self).__init__()
 
         self.args = args
         self.hidden_size = args.gnn_hidden_size
         self.heads = args.gnn_num_heads
         self.concat = args.gnn_concat_heads
 
-        self.gnn = ZeroPreservingTransformerConvNet(
+        self.gnn = StableTransformerConvNet(
             input_dim=node_obs_shape,  # Full dimension (no entity type to strip)
             edge_dim=edge_dim,
             hidden_size=args.gnn_hidden_size,

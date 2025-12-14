@@ -1,7 +1,3 @@
-"""
-Graph-based MAPPO Policy with SSM Magnitude Term and Base Controller.
-Wraps actor and critic networks for multi-agent RL with GNN-based learning and SSM-based magnitude modulation.
-"""
 import gymnasium as gym
 import argparse
 
@@ -16,20 +12,6 @@ from loguru import logger
 class MAD_MAPPOPolicy:
     """
     Graph-based MAPPO Policy with SSM magnitude term and base controller.
-
-    The policy uses the decomposition:
-        u_t = u_base + |M_t(rel_goal_t=0)| * D_t(neighborhood_states)
-
-    where:
-        - u_base = K_p * rel_goal is a proportional base controller
-        - M_t is an SSM-based magnitude term "kickstarted" with relative goal at t=0
-        - D_t is a GNN-based stochastic direction term (normalized via tanh)
-
-    Key Features:
-        - Base controller provides task-relevant baseline behavior
-        - SSM magnitude term is seeded with relative goal at episode start, then receives zeros
-        - GNN direction term learns from neighborhood observations
-        - Total action is base + magnitude * direction
 
     Args:
         args: Arguments containing relevant model and policy information
@@ -85,31 +67,6 @@ class MAD_MAPPOPolicy:
             self.max_batch_size,
         )
 
-        self.magnitude_warmup_epochs = 25 #args.magnitude_warmup_epochs
-        self.magnitude_initial_lr = self.lr * 0.25 #args.magnitude_initial_lr
-        self.magnitude_max_lr = self.lr #args.magnitude_max_lr
-
-        self.m_warmup_episodes = 100 #args.m_warmup_episodes
-        self.m_max_final = 5.0 #args.m_max_final
-
-
-        # Separate parameter groups for magnitude and direction pathways
-        # Magnitude pathway: SSM + magnitude GNN (slower learning rate)
-        # magnitude_params = list(self.actor.ssm.parameters()) + list(self.actor.mag_gnn.parameters())
-        # magnitude_param_ids = {id(p) for p in magnitude_params}
-
-        # # Direction pathway: everything else (normal learning rate)
-        # direction_params = [p for p in self.actor.parameters() if id(p) not in magnitude_param_ids]
-
-        # self.actor_optimizer = torch.optim.Adam(
-        #     [
-        #         {'params': direction_params, 'lr': self.lr},
-        #         {'params': magnitude_params, 'lr': self.magnitude_initial_lr},
-        #     ],
-        #     eps=self.opti_eps,
-        #     weight_decay=self.weight_decay,
-        # )
-        
         self.actor_optimizer = torch.optim.Adam(
             self.actor.parameters(),
             lr=self.lr,

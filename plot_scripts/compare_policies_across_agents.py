@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-Script to evaluate and compare MAD and InforMARL policies across different numbers of agents.
+Script to generate figure 3 in the paper.
 Simulates X random environment initializations for each agent count from 1 to 10,
 collects rewards, calculates mean rewards, and plots the results.
 """
@@ -25,15 +24,13 @@ from onpolicy.envs.env_wrappers import GraphDummyVecEnv
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Compare MAD and InforMARL policies across agent counts")
+    parser = argparse.ArgumentParser()
 
     # Model paths
-    parser.add_argument("--informarl_model", type=str,
-                        default="models/informarl_actor/actor_seed_6.pt",
-                        help="Path to InforMARL model")
-    parser.add_argument("--mad_model", type=str,
-                        default="models/mad_actor/actor_seed_6.pt",
-                        help="Path to MAD model")
+    parser.add_argument("--model1", type=str,
+                        help="Path to model")
+    parser.add_argument("--model2", type=str,
+                        help="Path to model")
 
     # Evaluation parameters
     parser.add_argument("--num_episodes", type=int, default=10,
@@ -91,7 +88,7 @@ def create_args_for_env(num_agents, num_obstacles, episode_length, scenario_name
     args.scenario_name = scenario_name
     args.num_agents = num_agents
     args.num_obstacles = num_obstacles
-    args.num_landmarks = num_agents  # Typically same as num_agents
+    args.num_landmarks = num_agents  
     args.episode_length = episode_length
     args.seed = seed
 
@@ -410,8 +407,8 @@ def main():
 
         print(f"    Mean reward: {mean_reward:.3f} ± {std_reward:.3f}")
 
-        # ===== Evaluate MAD =====
-        print(f"  MAD policy:")
+        # ===== Evaluate Stable GNN =====
+        print(f"Stable GNN policy:")
 
         # Create args for environment
         mad_args = create_args_for_env(

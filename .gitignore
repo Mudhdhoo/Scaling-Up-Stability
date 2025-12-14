@@ -163,3 +163,7 @@ papers/*
 test.py
 plots/*
 results_*/*
+CLAUDE.md
+commands.txt
+test_model.py
+test_navigation_graph_env.py

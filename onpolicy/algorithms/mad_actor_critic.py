@@ -14,7 +14,7 @@ from onpolicy.algorithms.utils.act import ACTLayer
 from onpolicy.algorithms.utils.popart import PopArt
 from onpolicy.utils.util import get_shape_from_obs_space
 from onpolicy.algorithms.utils.ssm import SSM
-from onpolicy.algorithms.utils.gnn import ZeroPreservingGNNBase
+from onpolicy.algorithms.utils.gnn import StableGNNBase
 
 def minibatchGenerator(
     obs: Tensor, node_obs: Tensor, adj: Tensor, agent_id: Tensor, max_batch_size: int
@@ -34,14 +34,6 @@ def minibatchGenerator(
 
 class MAD_Actor(nn.Module):
     """
-    Actor network with SSM and proportional base controller for MAPPO.
-    Outputs actions as: u = u_base + |M(x0)| * u_gnn
-    where u_base = K_p * (goal - pos) is a proportional controller
-    and u_gnn is learned from GNN features.
-
-    IMPORTANT: Requires CONTINUOUS action space (Box).
-    Set discrete_action=False in training config.
-
     args: argparse.Namespace
         Arguments containing relevant model information.
     obs_space: (gym.Space)
@@ -113,9 +105,8 @@ class MAD_Actor(nn.Module):
             action_space, self.hidden_size, self._use_orthogonal, self._gain
         )
 
-        # Zero-preserving GNN for magnitude pathway (preserves L_p-stability)
-        # This processes neighbor observations and feeds to SSM
-        self.mag_gnn = ZeroPreservingGNNBase(
+        # Stable GNN for magnitude pathway (preserves L_p-stability)
+        self.mag_gnn = StableGNNBase(
             args, node_obs_shape, edge_dim, args.actor_graph_aggr
         )
         mag_gnn_out_dim = self.mag_gnn.out_dim
@@ -214,15 +205,6 @@ class MAD_Actor(nn.Module):
                     torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
                 )
 
-        # ==================== Magnitude GNN → SSM Pipeline ====================
-        # Process disturbances through zero-preserving GNN (preserves L_p-stability: f(0) = 0)
-        #
-        # Disturbances have the SAME shape as node_obs: (batch_size, num_nodes, node_feature_dim)
-        # At t=0: disturbances = node_obs (for SSM kickstart)
-        # At t>0: disturbances = padded actual disturbances (already padded in environment)
-        # Both use the SAME adjacency matrix to enable information sharing between agents
-
-        # Simply pass disturbances through GNN (no branching needed!)
         mag_gnn_out = self.mag_gnn(disturbances, adj, agent_id)
         ssm_input = mag_gnn_out
 
@@ -251,7 +233,6 @@ class MAD_Actor(nn.Module):
             actor_features, rnn_states = self.rnn(actor_features, rnn_states, masks)
 
         # Sample from Gaussian distribution
-        # y is the raw Gaussian sample, y_log_probs is log p(y)
         y, y_log_probs = self.act(
             actor_features, available_actions, deterministic
         )
@@ -261,28 +242,14 @@ class MAD_Actor(nn.Module):
 
         # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
         rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
-        u_base = self.K_p * rel_goal  # Broadcasting K_p
+        u_base = self.K_p * rel_goal  
 
-        # Pass SSM input through the state space model (online step-by-step execution)
-        # SSM outputs magnitude term M_t = SSM(GNN(neighbors_at_t0))
+
         ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
-
-        # Use shifted softplus for L_p-stability (zero-preserving) AND smooth gradients
-        # softplus(x) - log(2) ensures f(0) = 0 while maintaining differentiability everywhere
-        # Unlike ReLU (gradient=0 for x<0), this learns from ALL samples (gradient always > 0)
-        # This preserves L_p-stability: when disturbances=0, magnitude=0
-        # magnitude = (torch.nn.functional.softplus(ssm_out_raw) - math.log(2.0)).clamp(min=1e-6, max=self.m_max)
         magnitude = (torch.nn.functional.relu(ssm_out_raw)).clamp(min=1e-6, max=self.m_max)
-       # logger.info(f'magnitude: {magnitude}')
 
-        # action = u_base + |M| * tanh(y)
         actions = u_base + magnitude * u_gnn
-       # actions = u_gnn
 
-        # Jacobian correction for the transformation: action = u_base + M * tanh(y)
-        # log p(action) = log p(y) - log|det(J)|
-        # J = d(action)/dy = M * diag(1 - tanh(y)^2)
-        # log|det(J)| = sum(log|M|) + sum(log(1 - tanh(y)^2))
         action_dim = u_gnn.shape[-1]
         log_jac_tanh = torch.log(1 - u_gnn.pow(2) + 1e-8).sum(-1, keepdim=True)
         log_jac_M = torch.log(magnitude + 1e-8).sum(-1, keepdim=True) * action_dim
@@ -354,8 +321,6 @@ class MAD_Actor(nn.Module):
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
 
-        # Note: pre_tanh_value is not used - we recover y from action for correct importance sampling
-
         batch_size = obs.shape[0]
 
         # Detect episode resets (mask == 0)
@@ -399,36 +364,16 @@ class MAD_Actor(nn.Module):
                     torch.zeros(self.ssm.LRUR.state_features, device=obs.device),
                 )
 
-        # ==================== Magnitude GNN → SSM Pipeline ====================
-        # Process disturbances through zero-preserving GNN (preserves L_p-stability: f(0) = 0)
-        #
-        # Disturbances have the SAME shape as node_obs: (batch_size, num_nodes, node_feature_dim)
-        # At t=0: disturbances = node_obs (for SSM kickstart)
-        # At t>0: disturbances = padded actual disturbances (already padded in environment)
-        # Both use the SAME adjacency matrix to enable information sharing between agents
-
-        # Simply pass disturbances through GNN (no branching needed!)
         mag_gnn_out = self.mag_gnn(disturbances, adj, agent_id)
         ssm_input = mag_gnn_out
-
-        # Extract relative goal for base controller
         # Observation structure: [vel_x, vel_y, pos_x, pos_y, rel_goal_x, rel_goal_y, ...]
         rel_goal = obs[:, 4:6]  # [rel_goal_x, rel_goal_y] = goal - current_pos
-        u_base = self.K_p * rel_goal  # Broadcasting K_p
+        u_base = self.K_p * rel_goal  
 
         ssm_out_raw, ssm_states, _ = self.ssm.step(ssm_input, ssm_states)
 
-        # Use shifted softplus for L_p-stability (zero-preserving) AND smooth gradients
-        # softplus(x) - log(2) ensures f(0) = 0 while maintaining differentiability everywhere
-        # Unlike ReLU (gradient=0 for x<0), this learns from ALL samples (gradient always > 0)
-      #  magnitude = (torch.nn.functional.softplus(ssm_out_raw) - math.log(2.0)).clamp(min=1e-6, max=self.m_max)
         magnitude = (torch.nn.functional.relu(ssm_out_raw)).clamp(min=1e-6, max=self.m_max)
 
-        # CRITICAL: Must recover y from stored action using NEW magnitude for correct PPO importance sampling
-        # The stored action was: action = u_base + M_old * tanh(y_old)
-        # Under the new policy with M_new, the corresponding y is:
-        # y_new = atanh((action - u_base) / M_new)
-        # Using stored y_old would compute probability at wrong action point!
         u_gnn_tanh = torch.clamp((action - u_base) / (magnitude + 1e-8), -0.999, 0.999)
         y = torch.atanh(u_gnn_tanh)
 
@@ -467,16 +412,11 @@ class MAD_Actor(nn.Module):
 
         action_dim = u_gnn_tanh.shape[-1]
 
-        # Jacobian correction for the transformation: action = u_base + M * tanh(y)
-        # Gradients to SSM flow through log_jac_M term
         log_jac_tanh = torch.log(1 - u_gnn_tanh.pow(2) + 1e-8).sum(-1, keepdim=True)
         log_jac_M = torch.log(magnitude + 1e-8).sum(-1, keepdim=True) * action_dim
 
         action_log_probs = y_log_probs - log_jac_M - log_jac_tanh
 
-        # Correct entropy for the transformed distribution: H(action) = H(y) + E[log|det(J)|]
-        # The Jacobian terms contribute positively to entropy (larger M = more spread = higher entropy)
-        # This balances the -log|M| penalty in log_prob, preventing magnitude collapse
         log_det_jacobian = log_jac_M + log_jac_tanh
         dist_entropy = dist_entropy_y + log_det_jacobian.mean()
 

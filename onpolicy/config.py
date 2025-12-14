@@ -632,10 +632,6 @@ def get_config():
 
 
 def graph_config(args, parser):
-    # tmp_args = parser.parse_args()
-    # num_agents = tmp_args.num_agents
-    # https://mmuratarat.github.io/2019-06-12/embeddings-with-numeric-variables-Keras#:~:text=Jeremy%20Howard%20provides%20a%20general,number%20of%20categories%2F2).&text=However%2C%20literature%20shows%20that%20embedding,produces%20the%20most%20accurate%20results.
-    # https://datascience.stackexchange.com/questions/31109/ratio-between-embedded-vector-dimensions-and-vocabulary-size
     entity_mapping = {"agent": 0, "landmark": 1, "obstacle": 2}
     num_entities = len(entity_mapping.keys())
     embedding_size = (num_entities) // 2 + 1
@@ -757,14 +753,6 @@ def graph_config(args, parser):
         help="The target mini batch size to use",
     )
 
-    # MAD Policy parameters
-    parser.add_argument(
-        "--learnable_kp",
-        action="store_true",
-        default=False,
-        help="Whether to use learnable proportional gains in the base controller",
-    )
-
     parser.add_argument(
         "--kp_val",
         type=float,
@@ -772,40 +760,12 @@ def graph_config(args, parser):
         help="Initial value for learnable proportional gains in the base controller",
     )
 
-    parser.add_argument(
-        "--m_schedule_type",
-        type=str,
-        default="none",
-        choices=["linear", "step", "none"],
-        help="Type of magnitude schedule: 'linear' for linear warmup, 'step' for step change at specified episode",
-    )
 
     parser.add_argument(
         "--m_max_start",
         type=float,
         default=2,
         help="Starting value for magnitude annealing in the MAD policy",
-    )
-
-    parser.add_argument(
-        "--m_max_final",
-        type=float,
-        default=5.0,
-        help="Final value for magnitude annealing in the MAD policy",
-    )
-
-    parser.add_argument(
-        "--m_max_warmup_episodes",
-        type=int,
-        default=250,
-        help="Number of episodes to linearly warm up m_max from start to final (0 = disabled)",
-    )
-
-    parser.add_argument(
-        "--m_max_step_episode",
-        type=int,
-        default=100,
-        help="Episode at which to step m_max from start to final (0 = disabled). Takes precedence over warmup.",
     )
 
     parser.add_argument(
@@ -828,22 +788,6 @@ def graph_config(args, parser):
         default=False,
         help="Whether to use MAD (Magnitude And Direction) policy "
         "for stability-constrained RL. MAD decomposes control as u = u_base + |M(x0)| * D(neighbors)",
-    )
-
-    parser.add_argument(
-        "--use_gnn_plus_base",
-        action="store_true",
-        default=False,
-        help="Whether to use GNN plus base controller policy "
-        "GNN plus base controller policy decomposes control as u = u_base + D(neighbors) where u_base = K_p * (goal - current)",
-    )
-
-    parser.add_argument(
-        "--use_ssm_plus_base",
-        action="store_true",
-        default=False,
-        help="Whether to use SSM plus base controller policy "
-        "SSM plus base controller policy decomposes control as u = u_base + |M(x0)| * D(neighbors) where u_base = K_p * (goal - current)",
     )
 
     parser.add_argument(
