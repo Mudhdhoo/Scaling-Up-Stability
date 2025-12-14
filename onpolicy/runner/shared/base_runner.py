@@ -215,12 +215,23 @@ class Runner(object):
         policy_actor_state_dict = torch.load(
             str(self.model_dir) + "/actor.pt", map_location=torch.device("cpu"), weights_only=True
         )
-        self.policy.actor.load_state_dict(policy_actor_state_dict)
+        # Use strict=False to allow loading models with different normalization settings
+        missing_keys, unexpected_keys = self.policy.actor.load_state_dict(policy_actor_state_dict, strict=False)
+        if missing_keys:
+            logger.warning(f"Missing keys when loading actor: {missing_keys}")
+        if unexpected_keys:
+            logger.warning(f"Unexpected keys when loading actor: {unexpected_keys}")
+
         if not self.all_args.use_render:
             policy_critic_state_dict = torch.load(
                 str(self.model_dir) + "/critic.pt", map_location=torch.device("cpu"), weights_only=True
             )
-            self.policy.critic.load_state_dict(policy_critic_state_dict)
+            # Use strict=False to allow loading models with different normalization settings
+            missing_keys, unexpected_keys = self.policy.critic.load_state_dict(policy_critic_state_dict, strict=False)
+            if missing_keys:
+                logger.warning(f"Missing keys when loading critic: {missing_keys}")
+            if unexpected_keys:
+                logger.warning(f"Unexpected keys when loading critic: {unexpected_keys}")
 
     def process_infos(self, infos):
         """Process infos returned by environment."""

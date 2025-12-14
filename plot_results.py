@@ -111,13 +111,44 @@ def plot_results(event_files, output_file='training_results.png', smooth_window=
         output_file: Path to save the plot
         smooth_window: Window size for smoothing curves (moving average)
     """
-    plt.figure(figsize=(12, 7))
+    # Set professional style
+    # Set Times New Roman font globally
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = ['Times New Roman']
 
-    # Define colors for different methods
+    try:
+        plt.style.use('seaborn-v0_8-paper')
+    except:
+        try:
+            plt.style.use('seaborn-paper')
+        except:
+            # Fallback to default if seaborn not available
+            plt.rcParams.update({
+                'font.size': 11,
+                'axes.labelsize': 12,
+                'axes.titlesize': 14,
+                'xtick.labelsize': 11,
+                'ytick.labelsize': 11,
+                'legend.fontsize': 11,
+                'figure.titlesize': 14
+            })
+
+    fig, ax = plt.subplots(figsize=(10, 6), dpi=100)
+
+    # Define colors for different methods (publication-quality colors)
     method_colors = {
-        'mad': 'blue',
-        'informarl': 'red',
-        'mappo': 'green',
+        'mad': '#2ecc71',  # Green
+        'informarl': '#9b59b6',  # Violet
+        'mappo': '#3498db',  # Blue
+        'p_controller': '#e74c3c',  # Red
+    }
+
+    # Nice names for legend
+    method_names = {
+        'mad': 'Ours',
+        'informarl': 'InforMARL',
+        'mappo': 'MAPPO',
+        'p_controller': 'P Controller',
     }
 
     # Group data by method
@@ -140,46 +171,107 @@ def plot_results(event_files, output_file='training_results.png', smooth_window=
         print("Error: No data found to plot!")
         return
 
-    # Plot each run
+    # Find the minimum length across all runs
+    min_length = float('inf')
     for method_name, runs in data_by_method.items():
+        for run_data in runs:
+            min_length = min(min_length, len(run_data['values']))
+
+    print(f"\nMinimum data length found: {min_length}")
+    print(f"Truncating all data to {min_length} points for consistent comparison\n")
+
+    # Truncate all data to the minimum length
+    for method_name, runs in data_by_method.items():
+        for run_data in runs:
+            run_data['steps'] = run_data['steps'][:min_length]
+            run_data['values'] = run_data['values'][:min_length]
+
+    # Calculate mean and std for each method
+    for method_name, runs in data_by_method.items():
+        if not runs:
+            continue
+
         color = method_colors.get(method_name.lower(), None)
 
-        for i, run_data in enumerate(runs):
-            steps = run_data['steps']
-            values = run_data['values']
-            seed = run_data['seed']
-            run_num = run_data['run']
+        # Stack all values for this method
+        all_values = np.array([run_data['values'] for run_data in runs])
+        steps = runs[0]['steps']  # All have same steps after truncation
 
-            # Apply smoothing if window > 1
-            if smooth_window > 1 and len(values) >= smooth_window:
-                smoothed_values = np.convolve(values,
-                                              np.ones(smooth_window)/smooth_window,
-                                              mode='valid')
-                smoothed_steps = steps[smooth_window-1:]
-            else:
-                smoothed_values = values
-                smoothed_steps = steps
+        # Apply smoothing if window > 1
+        if smooth_window > 1 and len(steps) >= smooth_window:
+            # Smooth each run separately
+            smoothed_all_values = []
+            for values in all_values:
+                smoothed = np.convolve(values,
+                                      np.ones(smooth_window)/smooth_window,
+                                      mode='valid')
+                smoothed_all_values.append(smoothed)
+            smoothed_all_values = np.array(smoothed_all_values)
+            smoothed_steps = steps[smooth_window-1:]
+        else:
+            smoothed_all_values = all_values
+            smoothed_steps = steps
 
-            # Create label
-            if seed is not None:
-                label = f"{method_name} (seed {seed}, run {run_num})"
-            else:
-                label = f"{method_name} (run {run_num})"
+        # Calculate mean and std across runs
+        mean_values = np.mean(smoothed_all_values, axis=0)
+        # Use ddof=1 for sample standard deviation (standard practice for small samples)
+        std_values = np.std(smoothed_all_values, axis=0, ddof=1)
 
-            # Plot
-            plt.plot(smoothed_steps, smoothed_values,
-                    label=label, color=color, alpha=0.7, linewidth=1.5)
+        # Get nice display name
+        display_name = method_names.get(method_name.lower(), method_name)
 
-    plt.xlabel('Training Steps', fontsize=12)
-    plt.ylabel('Average Episode Rewards', fontsize=12)
-    plt.title('Training Performance Comparison', fontsize=14, fontweight='bold')
-    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
+        # Plot mean trajectory
+        ax.plot(smoothed_steps, mean_values,
+                label=f"{display_name}",
+                color=color, linewidth=2.5, zorder=2)
 
-    # Save figure
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        # Plot variance band (mean ± std)
+        ax.fill_between(smoothed_steps,
+                        mean_values - std_values,
+                        mean_values + std_values,
+                        color=color, alpha=0.25, linewidth=0, zorder=1)
+
+    # Professional styling
+    ax.set_xlabel('Steps', fontsize=25)
+    ax.set_ylabel('Rewards', fontsize=25)
+
+    # Legend inside plot (upper left corner)
+    ax.legend(loc='upper left', fontsize=17, frameon=True,
+             fancybox=True, shadow=True, framealpha=0.95)
+
+    # Grid styling - dotted background
+    ax.grid(True, alpha=0.5, linestyle=':', linewidth=1.0)
+
+    # Add minor ticks for better readability
+    ax.minorticks_on()
+    ax.grid(True, which='minor', alpha=0.3, linestyle=':', linewidth=0.7)
+
+    # Improve tick label sizes
+    ax.tick_params(axis='both', which='major', labelsize=20, length=6, width=1.5)
+    ax.tick_params(axis='both', which='minor', length=3, width=1)
+
+    # Spine styling
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.5)
+
+    # Format x-axis in scientific notation if values are large
+    max_step = max([run_data['steps'][-1] for runs in data_by_method.values()
+                    for run_data in runs])
+    if max_step > 100000:
+        ax.ticklabel_format(style='scientific', axis='x', scilimits=(0, 0))
+
+    # Tight layout with some padding
+    plt.tight_layout(pad=0.5)
+
+    # Save figure with high DPI for publication
+    # Save both PNG and PDF (PDF is preferred for LaTeX papers)
+    plt.savefig(output_file, dpi=300, bbox_inches='tight', facecolor='white')
     print(f"\nPlot saved to: {output_file}")
+
+    # Also save as PDF for publication
+    pdf_file = output_file.replace('.png', '.pdf')
+    plt.savefig(pdf_file, dpi=300, bbox_inches='tight', facecolor='white')
+    print(f"PDF version saved to: {pdf_file}")
 
     # Show plot
     plt.show()
@@ -188,7 +280,7 @@ def plot_results(event_files, output_file='training_results.png', smooth_window=
 def main():
     """Main function to run the plotting script."""
     # Define base directories to search
-    base_dirs = ['results_mad', 'results_informarl']
+    base_dirs = ['results_mad', 'results_informarl', 'results_p_controller']
 
     print("Searching for TensorBoard event files...")
     event_files = find_event_files(base_dirs)

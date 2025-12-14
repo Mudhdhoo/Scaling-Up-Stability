@@ -783,7 +783,7 @@ def graph_config(args, parser):
     parser.add_argument(
         "--m_max_start",
         type=float,
-        default=1,
+        default=2,
         help="Starting value for magnitude annealing in the MAD policy",
     )
 

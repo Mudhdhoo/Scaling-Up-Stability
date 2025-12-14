@@ -20,7 +20,8 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --auto_mini_batch_size --target_mini_batch_size 128 \
 --use_wandb "False" \
 --discrete_action "False" \
---use_disturbance
+--use_disturbance \
+--cuda
 
 ---------- MAD ----------
 
@@ -28,8 +29,8 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --project_name "informarl_base" \
 --env_name "GraphMPE" \
 --algorithm_name "rmappo" \
---seed 9 \
---experiment_name "mad_policy_seed_9" \
+--seed 5 \
+--experiment_name "mad_policy_seed_5" \
 --scenario_name "navigation_graph" \
 --num_agents 5 \
 --collision_rew 5 \
@@ -52,5 +53,8 @@ caffeinate -i python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popa
 --use_disturbance
 
 
+---------- Plotting Stability Comparison ----------
+python compare_stability.py --max_time_steps 100 --use_trained_policy False --use_disturbance
 
-
+---------- Plotting number of agents comparison ----------
+python compare_policies_across_agents.py

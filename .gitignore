@@ -157,8 +157,9 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+
 test.ipynb
-
 papers/*
-
 test.py
+plots/*
+results_*/*
