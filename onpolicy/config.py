@@ -826,6 +826,15 @@ def graph_config(args, parser):
         help="Exponential decay rate for the disturbance over time",
     )
 
+    # Control penalty parameter
+    parser.add_argument(
+        "--control_penalty_weight",
+        type=float,
+        default=0.01,
+        help="Weight for penalizing excessive control inputs in the reward function. "
+        "Higher values encourage smoother, lower-magnitude controls.",
+    )
+
     all_args = parser.parse_known_args(args)[0]
 
     if all_args.auto_mini_batch_size:

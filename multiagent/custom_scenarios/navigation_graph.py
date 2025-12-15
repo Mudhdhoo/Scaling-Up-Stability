@@ -64,6 +64,9 @@ class Scenario(BaseScenario):
 
         • max_edge_dist: float
             Maximum distance to consider to connect the nodes in the graph
+        • control_penalty_weight: float
+            Weight for penalizing excessive control inputs (default: 0.01)
+            Higher values encourage smoother, lower-magnitude controls
         """
         # pull params from args
         self.world_size = args.world_size
@@ -77,6 +80,11 @@ class Scenario(BaseScenario):
         self.min_dist_thresh = args.min_dist_thresh
         self.use_dones = args.use_dones
         self.episode_length = args.episode_length
+        # control penalty weight (default to 0.01 if not specified)
+        if hasattr(args, "control_penalty_weight"):
+            self.control_penalty_weight = args.control_penalty_weight
+        else:
+            self.control_penalty_weight = 0.01
         if not hasattr(args, "max_edge_dist"):
             self.max_edge_dist = 1
             print("_" * 60)
@@ -377,7 +385,7 @@ class Scenario(BaseScenario):
 
     def reward(self, agent: Agent, world: World) -> float:
         # Agents are rewarded based on distance to
-        # its landmark, penalized for collisions
+        # its landmark, penalized for collisions and excessive control
         rew = 0
         agents_goal = world.get_entity(entity_type="landmark", id=agent.id)
         dist_to_goal = np.sqrt(
@@ -399,6 +407,12 @@ class Scenario(BaseScenario):
                 pos=agent.state.p_pos, entity_size=agent.size, world=world
             ):
                 rew -= self.collision_rew
+
+        # Penalize excessive control inputs
+        if agent.action.u is not None:
+            control_magnitude = np.linalg.norm(agent.action.u)
+            rew -= self.control_penalty_weight * control_magnitude
+
         return rew
 
     def observation(self, agent: Agent, world: World) -> arr:
@@ -546,6 +560,10 @@ if __name__ == "__main__":
             self.episode_length: int = 25
             self.max_edge_dist: float = 1
             self.graph_feat_type: str = "global"
+            self.control_penalty_weight: float = 0.01
+            self.use_disturbance: bool = False
+            self.disturbance_std: float = 0.1
+            self.disturbance_decay_rate: float = 0.1
 
     args = Args()
 
