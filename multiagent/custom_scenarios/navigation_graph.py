@@ -80,11 +80,9 @@ class Scenario(BaseScenario):
         self.min_dist_thresh = args.min_dist_thresh
         self.use_dones = args.use_dones
         self.episode_length = args.episode_length
-        # control penalty weight (default to 0.01 if not specified)
-        if hasattr(args, "control_penalty_weight"):
-            self.control_penalty_weight = args.control_penalty_weight
-        else:
-            self.control_penalty_weight = 0.01
+        self.control_penalty_weight = args.control_penalty_weight
+        self.dist_weight = args.dist_weight
+
         if not hasattr(args, "max_edge_dist"):
             self.max_edge_dist = 1
             print("_" * 60)
@@ -394,7 +392,7 @@ class Scenario(BaseScenario):
         if dist_to_goal < self.min_dist_thresh:
             rew += self.goal_rew
         else:
-            rew -= dist_to_goal
+            rew -= self.dist_weight * dist_to_goal
         if agent.collide:
             for a in world.agents:
                 # do not consider collision with itself

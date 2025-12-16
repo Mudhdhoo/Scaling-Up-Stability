@@ -835,6 +835,14 @@ def graph_config(args, parser):
         "Higher values encourage smoother, lower-magnitude controls.",
     )
 
+    parser.add_argument(
+        "--dist_weight",
+        type=float,
+        default=0.5,
+        help="Weight for penalizing distance to goal in the reward function. "
+        "Higher values encourage agents to reach the goal slower.",
+    )
+
     all_args = parser.parse_known_args(args)[0]
 
     if all_args.auto_mini_batch_size:
