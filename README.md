@@ -30,7 +30,7 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --num_mini_batch 1 \
 --episode_length 25 \
 --num_env_steps 2000000 \
---ppo_epoch 10 --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
+--ppo_epoch 10 --use_ReLU --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
 --user_name "marl" \
 --use_cent_obs "False" \
 --graph_feat_type "relative" \
@@ -56,7 +56,7 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --num_mini_batch 1 \
 --episode_length 25 \
 --num_env_steps 2000000 \
---ppo_epoch 10 --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
+--ppo_epoch 10 --use_ReLU --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
 --user_name "marl" \
 --use_cent_obs "False" \
 --graph_feat_type "relative" \
