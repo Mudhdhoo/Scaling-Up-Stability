@@ -27,10 +27,10 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     # Model paths
-    parser.add_argument("--model1", type=str,
-                        help="Path to model")
-    parser.add_argument("--model2", type=str,
-                        help="Path to model")
+    parser.add_argument("--model_path", type=str,
+                        default="./onpolicy/results/GraphMPE/navigation_graph/rmappo/stable_gnn_train/run1/models/actor.pt")
+    parser.add_argument("--model_path_informarl", type=str,
+                        default="./onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run1/models/actor.pt")
 
     # Evaluation parameters
     parser.add_argument("--num_episodes", type=int, default=10,
@@ -326,8 +326,8 @@ def main():
     print("="*80)
     print("Policy Comparison Across Agent Counts")
     print("="*80)
-    print(f"InforMARL model: {args.informarl_model}")
-    print(f"MAD model: {args.mad_model}")
+    print(f"InforMARL model: {args.model_path_informarl}")
+    print(f"MAD model: {args.model_path}")
     print(f"Agent range: {args.min_agents} to {args.max_agents}")
     print(f"Episodes per configuration: {args.num_episodes}")
     print(f"Episode length: {args.episode_length}")
@@ -338,8 +338,8 @@ def main():
     device = torch.device(args.device)
 
     # Load model configurations
-    informarl_config = load_model_config(args.informarl_model)
-    mad_config = load_model_config(args.mad_model)
+    informarl_config = load_model_config(args.model_path_informarl)
+    mad_config = load_model_config(args.model_path)
 
     # Results storage
     agent_counts = list(range(args.min_agents, args.max_agents + 1))
@@ -388,7 +388,7 @@ def main():
         )
 
         # Load weights
-        informarl_state_dict = torch.load(args.informarl_model, map_location=device)
+        informarl_state_dict = torch.load(args.model_path_informarl, map_location=device)
         informarl_policy.actor.load_state_dict(informarl_state_dict)
 
         # Evaluate
@@ -442,7 +442,7 @@ def main():
         )
 
         # Load weights
-        mad_state_dict = torch.load(args.mad_model, map_location=device)
+        mad_state_dict = torch.load(args.model_path, map_location=device)
         mad_policy.actor.load_state_dict(mad_state_dict)
 
         # Evaluate

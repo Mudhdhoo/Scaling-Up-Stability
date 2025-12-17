@@ -830,7 +830,7 @@ def graph_config(args, parser):
     parser.add_argument(
         "--control_penalty_weight",
         type=float,
-        default=0.01,
+        default=0.0,
         help="Weight for penalizing excessive control inputs in the reward function. "
         "Higher values encourage smoother, lower-magnitude controls.",
     )
@@ -838,7 +838,7 @@ def graph_config(args, parser):
     parser.add_argument(
         "--dist_weight",
         type=float,
-        default=0.5,
+        default=1.0,
         help="Weight for penalizing distance to goal in the reward function. "
         "Higher values encourage agents to reach the goal slower.",
     )

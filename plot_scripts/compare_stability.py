@@ -34,6 +34,9 @@ def parse_args(args, parser):
     # Experiment parameters
     parser.add_argument("--max_time_steps", type=int, default=50)
 
+    parser.add_argument("--model_path", type=str, default="./onpolicy/results/GraphMPE/navigation_graph/rmappo/stable_gnn_train/run1/models/actor.pt")
+    parser.add_argument("--model_path_informarl", type=str, default="./onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run1/models/actor.pt")
+
     all_args = parser.parse_known_args(args)[0]
     return all_args, parser
 
@@ -194,8 +197,8 @@ def main():
         )
 
         if all_args.use_trained_policy:
-            mad_policy.actor.load_state_dict(torch.load(f"models/mad_actor/actor.pt", map_location=torch.device('cpu')))
-            informarl_policy.actor.load_state_dict(torch.load(f"models/informarl_actor/actor.pt", map_location=torch.device('cpu')))
+            mad_policy.actor.load_state_dict(torch.load(all_args.model_path, map_location=torch.device('cpu')))
+            informarl_policy.actor.load_state_dict(torch.load(all_args.model_path_informarl, map_location=torch.device('cpu')))
 
         mad_policy.actor.eval()
         informarl_policy.actor.eval()
