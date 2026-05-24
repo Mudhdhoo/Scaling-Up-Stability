@@ -278,7 +278,12 @@ def plot_results(event_files, output_file='training_results.png', smooth_window=
 def main():
     """Main function to run the plotting script."""
     # Define base directories to search
-    base_dirs = ['results_mad', 'results_informarl', "results_mad_baseline", "results_mlp_critic"]
+    data_dir = 'training_curves'
+    base_dirs = [os.path.join(data_dir, 'results_mad'), 
+                 os.path.join(data_dir, 'results_informarl'), 
+                 os.path.join(data_dir, 'results_mad_baseline'), 
+                 os.path.join(data_dir, 'results_mlp_critic')
+                 ]
 
     print("Searching for TensorBoard event files...")
     event_files = find_event_files(base_dirs)
