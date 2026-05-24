@@ -783,11 +783,21 @@ def graph_config(args, parser):
     )
 
     parser.add_argument(
-        "--use_mad_policy",
+        "--use_stabilizing_policy",
+        action="store_true",
+        default=False
+    )
+
+    parser.add_argument(
+        "--use_centralized_actor",
         action="store_true",
         default=False,
-        help="Whether to use MAD (Magnitude And Direction) policy "
-        "for stability-constrained RL. MAD decomposes control as u = u_base + |M(x0)| * D(neighbors)",
+    )
+
+    parser.add_argument(
+        "--use_centralized_critic",
+        action="store_true",
+        default=False
     )
 
     parser.add_argument(
@@ -844,6 +854,14 @@ def graph_config(args, parser):
     )
 
     all_args = parser.parse_known_args(args)[0]
+
+    # The baseline reuses every MAD code path (buffer allocates SSM states,
+    # env is continuous, trainer disables AMP). Only the actor class differs.
+    if all_args.use_centralized_actor:
+        all_args.use_stabilizing_policy = True
+
+    if all_args.use_centralized_critic:
+        all_args.use_stabilizing_policy = True
 
     if all_args.auto_mini_batch_size:
         # for recurrent generator only

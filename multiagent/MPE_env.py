@@ -90,7 +90,7 @@ def GraphMPEEnv(args):
     if hasattr(args, 'discrete_action') and args.discrete_action is not None:
         # User explicitly specified discrete_action
         discrete_action = args.discrete_action
-    elif hasattr(args, 'use_mad_policy') and args.use_mad_policy:
+    elif hasattr(args, 'use_stabilizing_policy') and args.use_stabilizing_policy:
         # MAD policy requires continuous actions
         discrete_action = False
     else:

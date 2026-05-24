@@ -183,6 +183,7 @@ class MAD_MAPPOPolicy:
         values, rnn_states_critic = self.critic.forward(
             cent_obs, node_obs, adj, share_agent_id, rnn_states_critic, masks
         )
+
         return values, actions, action_log_probs, rnn_states_actor, rnn_states_critic, ssm_states, pre_tanh_value
 
     def get_values(

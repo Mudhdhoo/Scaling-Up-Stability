@@ -144,12 +144,15 @@ class GraphReplayBuffer(object):
 
         # LRU/SSM hidden states for MAD or SSM policy (if used)
         # LRU hidden states are complex-valued: [real, imaginary]
-        self.use_mad_policy = getattr(args, 'use_mad_policy', False)
+        self.use_stabilizing_policy = getattr(args, 'use_stabilizing_policy', False)
         self.use_ssm_plus_base = getattr(args, 'use_ssm_plus_base', False)
-        if self.use_mad_policy or self.use_ssm_plus_base:
+        if self.use_stabilizing_policy or self.use_ssm_plus_base:
             # Use lru_hidden_dim for MAD, ssm_hidden_dim for SSM, default 64
             self.lru_hidden_dim = getattr(args, 'lru_hidden_dim',
                                          getattr(args, 'ssm_hidden_dim', 64))
+            # Baseline actor packs two SSM states (M and A) along the feature dim.
+            if getattr(args, 'use_centralized_actor', False):
+                self.lru_hidden_dim *= 2
             self.lru_hidden_states = np.zeros(
                 (
                     self.episode_length + 1,
@@ -194,7 +197,7 @@ class GraphReplayBuffer(object):
             (self.episode_length, self.n_rollout_threads, num_agents, act_shape),
             dtype=np.float32,
         )
-        # Log probs are always summed to scalar (1 dimension), regardless of action space
+
         self.action_log_probs = np.zeros(
             (self.episode_length, self.n_rollout_threads, num_agents, 1),
             dtype=np.float32,
@@ -211,10 +214,6 @@ class GraphReplayBuffer(object):
         self.bad_masks = np.ones_like(self.masks)
         self.active_masks = np.ones_like(self.masks)
 
-        # Disturbances for MAD policy - EXACTLY the same structure as node_obs
-        # Shape: (episode_length + 1, n_rollout_threads, num_agents, num_nodes, node_feature_dim)
-        # At t=0: Contains node_obs (for SSM kickstart)
-        # At t>0: Contains padded disturbances (same shape as node_obs)
         self.disturbances = np.zeros(
             (
                 self.episode_length + 1,

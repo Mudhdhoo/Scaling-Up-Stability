@@ -35,7 +35,7 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --use_cent_obs "False" \
 --graph_feat_type "relative" \
 --auto_mini_batch_size --target_mini_batch_size 128 \
---use_mad_policy \
+--use_stabilizing_policy \
 --discrete_action "False" \
 --use_disturbance
 ```

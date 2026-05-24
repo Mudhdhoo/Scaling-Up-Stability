@@ -15,6 +15,9 @@ from onpolicy.algorithms.graph_MAPPOPolicy import GR_MAPPOPolicy
 from multiagent.custom_scenarios.navigation_graph import Scenario
 from multiagent.environment import MultiAgentGraphEnv
 from onpolicy.config import graph_config, get_config
+from tqdm import tqdm
+
+from loguru import logger
 
 
 def parse_args(args, parser):
@@ -33,9 +36,12 @@ def parse_args(args, parser):
 
     # Experiment parameters
     parser.add_argument("--max_time_steps", type=int, default=50)
+    parser.add_argument("--max_num_agents", type=int, default=10)
 
-    parser.add_argument("--model_path", type=str, default="./onpolicy/results/GraphMPE/navigation_graph/rmappo/stable_gnn_train/run1/models/actor.pt")
-    parser.add_argument("--model_path_informarl", type=str, default="./onpolicy/results/GraphMPE/navigation_graph/rmappo/informarl/run1/models/actor.pt")
+    parser.add_argument("--model_path", type=str, default="")
+    parser.add_argument("--model_path_informarl", type=str, default="")
+
+    parser.add_argument("--out_dir", type=str, default="./plots")
 
     all_args = parser.parse_known_args(args)[0]
     return all_args, parser
@@ -137,29 +143,13 @@ def main():
     _, parser = parse_args(args, parser)
     all_args, parser = graph_config(args, parser)
 
-    print("=" * 80)
-    print("Comparing MAD Policy vs InforMARL Policy Stability")
-    print("=" * 80)
-    print(f"Number of agents: 1 to 10")
-    print(f"Number of obstacles: {all_args.num_obstacles}")
-    print(f"Episode length: {all_args.max_time_steps}")
-    print(f"Metric: ||[e^0, ..., e^N]|| where e^i = [rel_goal, velocity]")
-    print(f"        Both should converge to [0, 0, 0, 0] at goal")
-    print("=" * 80)
-
     # Run experiments for different numbers of agents
     episode_length = all_args.max_time_steps
     mad_norm_trajectories = []
     informarl_norm_trajectories = []
     agent_counts = []
 
-    print("\nRunning stability experiments...")
-    for num_agents in range(1, 11):
-        print(f"\n--- Testing with {num_agents} agent(s) ---")
-
-        # Update agent count in args
-        all_args.num_agents = num_agents
-
+    for num_agents in tqdm(range(1, all_args.max_num_agents + 1), desc="Testing with agents"):
         # Create scenario and environment
         scenario = Scenario()
         world = scenario.make_world(all_args)
@@ -274,33 +264,16 @@ def main():
 
     plt.tight_layout()
 
+    os.makedirs(all_args.out_dir, exist_ok=True)
+
     if all_args.use_trained_policy:
-        plt.savefig('plots/stability_train.png', dpi=300, bbox_inches='tight')
-        print("✓ Plot saved to: stability_train.png")
+        plt.savefig(f'{all_args.out_dir}/stability_train.png', dpi=300, bbox_inches='tight')
+        print(f"Plot saved to: {all_args.out_dir}/stability_train.png")
     else:
-        plt.savefig('plots/stability_no_train.png', dpi=300, bbox_inches='tight')
-        print("✓ Plot saved to: stability_no_train.png")
-
-    # Print summary statistics
-    print("\nSummary Statistics (by agent count):")
-    print(f"{'N_agents':<10} {'MAD Final Error':<18} {'InforMARL Final Error':<18}")
-    print("-" * 50)
-    for i, n_agents in enumerate(agent_counts):
-        mad_final = mad_norm_trajectories[i][-1]
-        informarl_final = informarl_norm_trajectories[i][-1]
-        print(f"{n_agents:<10} {mad_final:<18.4f} {informarl_final:<18.4f}")
-
-    print("\nOverall Statistics:")
-    mad_final_errors = [traj[-1] for traj in mad_norm_trajectories]
-    informarl_final_errors = [traj[-1] for traj in informarl_norm_trajectories]
-    print(f"MAD Policy - Mean: {np.mean(mad_final_errors):.4f}, Std: {np.std(mad_final_errors):.4f}")
-    print(f"InforMARL Policy - Mean: {np.mean(informarl_final_errors):.4f}, Std: {np.std(informarl_final_errors):.4f}")
+        plt.savefig(f'{all_args.out_dir}/stability_no_train.png', dpi=300, bbox_inches='tight')
+        print(f"Plot saved to: {all_args.out_dir}/stability_no_train.png")
 
     plt.show()
-
-    print("\n" + "=" * 80)
-    print("Experiment completed!")
-    print("=" * 80)
 
 
 if __name__ == '__main__':

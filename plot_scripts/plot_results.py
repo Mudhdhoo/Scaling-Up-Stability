@@ -9,6 +9,7 @@ from collections import defaultdict
 import numpy as np
 import matplotlib.pyplot as plt
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+from loguru import logger
 
 
 def find_event_files(base_dirs):
@@ -137,13 +138,15 @@ def plot_results(event_files, output_file='training_results.png', smooth_window=
     method_colors = {
         'mad': '#2ecc71',  # Green
         'informarl': '#9b59b6',  # Violet
-        'mappo': '#3498db',  # Blue
+        'mlp_critic': '#3498db',  # Blue
+        'mad_baseline': '#e74c3c',  # Red
     }
 
     method_names = {
         'mad': 'Ours',
-        'informarl': 'InforMARL',
-        'mappo': 'MAPPO'
+        'informarl': 'Ablation 1: No Stability',
+        'mlp_critic': 'Ablation 2: Centralized Critic',
+        'mad_baseline': 'Ablation 3: Centralized Actor',
     }
 
     # Group data by method
@@ -275,7 +278,7 @@ def plot_results(event_files, output_file='training_results.png', smooth_window=
 def main():
     """Main function to run the plotting script."""
     # Define base directories to search
-    base_dirs = ['results_mad', 'results_informarl']
+    base_dirs = ['results_mad', 'results_informarl', "results_mad_baseline", "results_mlp_critic"]
 
     print("Searching for TensorBoard event files...")
     event_files = find_event_files(base_dirs)

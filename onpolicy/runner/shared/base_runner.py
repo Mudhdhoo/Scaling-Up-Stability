@@ -81,7 +81,15 @@ class Runner(object):
         # from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
 
         if self.all_args.env_name == "GraphMPE":
-            if self.all_args.use_mad_policy:
+            if getattr(self.all_args, "use_centralized_actor", False):
+                logger.info("Using centralized MAD baseline (Furieri et al., 2025)")
+                from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
+                from onpolicy.algorithms.mad_baseline_MAPPOPolicy import MAD_Baseline_MAPPOPolicy as Policy
+            elif getattr(self.all_args, "use_centralized_critic", False):
+                logger.info("Using MAD policy with centralized MLP critic")
+                from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
+                from onpolicy.algorithms.mad_mlp_critic_MAPPOPolicy import MAD_MLP_Critic_MAPPOPolicy as Policy
+            elif self.all_args.use_stabilizing_policy:
                 logger.info("Using Stable GNN policy")
                 from onpolicy.algorithms.graph_mappo import GR_MAPPO as TrainAlgo
                 from onpolicy.algorithms.mad_MAPPOPolicy import MAD_MAPPOPolicy as Policy
@@ -120,22 +128,18 @@ class Runner(object):
                 device=self.device,
             )
 
-        # Verify zero-preservation for MAD policy
-        if self.all_args.use_mad_policy:
+        # Verify no biases
+        if self.all_args.use_stabilizing_policy:
             biases = [name for name, param in self.policy.actor.named_parameters() if 'bias' in name and 'magnitude' in name]
             if len(biases) > 0:
-                logger.error(f"ERROR: Found {len(biases)} biases in magnitude pathway: {biases}")
-                logger.error("This breaks zero-preservation and L_p-stability!")
-                raise RuntimeError("Magnitude pathway has biases - zero-preservation violated!")
-            else:
-                logger.info("✓ Zero-preservation verified: No biases found in magnitude pathway")
+                raise RuntimeError("Biases found in magnitude term")
 
         if self.model_dir is not None:
             print(f"Restoring from checkpoint stored in {self.model_dir}")
             self.restore()
             self.gif_dir = self.model_dir
 
-        # algorithm
+        # train algorithm
         self.trainer = TrainAlgo(self.all_args, self.policy, device=self.device)
 
         # buffer
@@ -294,19 +298,6 @@ class Runner(object):
     def get_collisions(self, env_infos: Dict):
         """
         Get the collisions from the env_infos
-        Example: {'agent0/individual_rewards': [5],
-                'agent0/time_to_goal': [0.6000000000000001],
-                'agent0/min_time_to_goal': [0.23632679886748278],
-                'agent0/dist_to_goal': [0.03768003822249384],
-                'agent0/num_agent_collisions': [1.0],
-                'agent0/num_obstacle_collisions': [0.0],
-                'agent1/individual_rewards': [5],
-                'agent1/time_to_goal': [0.6000000000000001],
-                'agent1/min_time_to_goal': [0.3067362645187025],
-                'agent1/dist_to_goal': [0.0387233764393595],
-                'agent1/num_agent_collisions': [1.0],
-                'agent1/num_obstacle_collisions': [0.0]}
-
         """
         collisions = 0
         for k, v in env_infos.items():
@@ -318,18 +309,6 @@ class Runner(object):
         """
         Get the fraction of episode required to get to the goals
         from env_infos
-        Example: {'agent0/individual_rewards': [5],
-                'agent0/time_to_goal': [0.6000000000000001],
-                'agent0/min_time_to_goal': [0.23632679886748278],
-                'agent0/dist_to_goal': [0.03768003822249384],
-                'agent0/num_agent_collisions': [1.0],
-                'agent0/num_obstacle_collisions': [0.0],
-                'agent1/individual_rewards': [5],
-                'agent1/time_to_goal': [0.6000000000000001],
-                'agent1/min_time_to_goal': [0.3067362645187025],
-                'agent1/dist_to_goal': [0.0387233764393595],
-                'agent1/num_agent_collisions': [1.0],
-                'agent1/num_obstacle_collisions': [0.0]}
         """
         fracs = []
         success = []

@@ -52,7 +52,7 @@ class GR_MAPPO():
         self._use_policy_active_masks = args.use_policy_active_masks
 
         # Disable AMP if using MAD policy (contains complex-valued SSM states)
-        self._use_amp = not getattr(args, 'use_mad_policy', False)
+        self._use_amp = not getattr(args, 'use_stabilizing_policy', False)
         if self._use_amp:
             self.scaler = torch.amp.GradScaler('cuda')
         else:
