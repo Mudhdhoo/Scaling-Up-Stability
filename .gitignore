@@ -34,7 +34,7 @@ test.ipynb
 papers/*
 test.py
 plots/*
-results_*/*
+training_curves/*
 CLAUDE.md
 commands.txt
 eval_models/*
