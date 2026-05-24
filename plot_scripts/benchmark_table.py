@@ -27,9 +27,9 @@ def parse_args():
                         default="./eval_models/stable_gnn/models/actor.pt")
     parser.add_argument("--informarl_model_path", type=str,
                         default="./eval_models/informarl/models/actor.pt")
-    parser.add_argument("--mad_model_path", type=str,
+    parser.add_argument("--centralized_actor_model_path", type=str,
                         default="./eval_models/mad/models/actor.pt")
-    parser.add_argument("--mad_mlp_critic_model_path", type=str,
+    parser.add_argument("--centralized_critic_model_path", type=str,
                         default="./eval_models/mad_mlp_critic/models/actor.pt")
     parser.add_argument("--num_seeds", type=int, default=10,
                         help="Number of random seeds per (policy, N) cell")
@@ -186,8 +186,8 @@ def main():
     policies = [
         ("Ours",      "mad",            args.ours_model_path),
         ("InforMARL", "informarl",      args.informarl_model_path),
-        ("MAD",       "mad_baseline",   args.mad_model_path),
-        ("MLP-Critic","mad_mlp_critic", args.mad_mlp_critic_model_path),
+        ("MAD",       "mad_baseline",   args.centralized_actor_model_path),
+        ("MLP-Critic","mad_mlp_critic", args.centralized_critic_model_path),
     ]
 
     # Pre-load each policy's training config

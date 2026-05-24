@@ -1,5 +1,5 @@
 # Scaling up Stability
-This is the code repository for the paper ***Scaling up Stability: Reinforcement Learning for Distributed Control of Networked Systems in the Space of Stabilizing Policies***.
+This is the code repository for the paper ***Distributed Control of Network Systems in the Space of Stabilizing Graph Neural Network Policies***.
 
 Authors: John Cao, Luca Furieri
 
@@ -8,14 +8,13 @@ Acknowledgement: This code is built on top of the [InforMARL](https://github.com
 
 ## Installation
 
-Setup environment and install packages:
+After setting up an environment, install packages with:
 ```
-conda env create -f environment.yml
-conda activate stable_gnn_policy
+pip install -r requirements.txt
 ```
 
 ## Training
-Run the following command to train the policy:
+Run the following command to train:
 ```
 python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --project_name "stable_gnn" \
@@ -35,44 +34,34 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 --use_cent_obs "False" \
 --graph_feat_type "relative" \
 --auto_mini_batch_size --target_mini_batch_size 128 \
---use_stabilizing_policy \
---discrete_action "False" \
---use_disturbance
-```
-
-Run the following to train the InforMARL baseline:
-
-```
-python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
---project_name "informarl" \
---env_name "GraphMPE" \
---algorithm_name "rmappo" \
---seed 0 \
---experiment_name "informarl" \
---scenario_name "navigation_graph" \
---num_agents 5 \
---collision_rew 5 \
---n_training_threads 1 --n_rollout_threads 128 \
---num_mini_batch 1 \
---episode_length 25 \
---num_env_steps 2000000 \
---ppo_epoch 10 --use_ReLU --gain 0.01 --lr 7e-4 --critic_lr 7e-4 \
---user_name "marl" \
---use_cent_obs "False" \
---graph_feat_type "relative" \
---auto_mini_batch_size --target_mini_batch_size 128 \
+--<use_stabilizing_policy, use_centrlized_actor, use_centralized_critic> \      # Omit this flag if training InforMARL
 --discrete_action "False" \
 --use_disturbance
 ```
 
 ## Testing
-Plot the testing results using these commands:
+Plot stability comparison:
 ```
-python -m plots.compare_stability --max_time_steps 100 --use_trained_policy False --use_disturbance # Compare stability without training
+python -m plot_scripts.compare_stability \
+--max_time_steps 100 \
+--use_disturbance
 
-python -m plots.compare_stability --max_time_steps 100 False --use_disturbance # Compare stability after training
+python -m plot_scripts.compare_stability \
+--max_time_steps 100 \
+--use_trained_policy \
+--model_path <trained-stable-model-path> \
+--model_path_informarl <trained-informarl-path> \
+--use_disturbance
+```
 
-python compare_policies_across_agents.py # Compare average reward across different number of agents
+Compute average rewards:
+```
+python -m plot_scripts.benchmark_table \
+--ours_model_path <path-to-model> \
+--informarl_model_path <path-to-model> \
+--centralized_actor_model_path <path-to-model> \
+--centralized_critic_model_path <path-to-model> \
+--num_seeds 100
 ```
 
 

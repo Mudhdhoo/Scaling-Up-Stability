@@ -78,11 +78,6 @@ class MPERunner(Runner):
             # log information
             if episode % self.log_interval == 0:
                 end = time.time()
-                # print(f"\n Scenario: {self.all_args.scenario_name} "
-                #     f"Algo: {self.algorithm_name} Exp: {self.experiment_name} "
-                #     f"Updates: {episode}/{episodes} episodes, total num timesteps: "
-                #     f"{total_num_steps}/{self.num_env_steps}, "
-                #     f"FPS: {int(total_num_steps / (end - start))}.\n")
 
                 env_infos = {}
                 if self.env_name == "MPE":
