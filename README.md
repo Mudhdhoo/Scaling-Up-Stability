@@ -1,4 +1,3 @@
-# Scaling up Stability
 This is the code repository for the paper ***Distributed Control of Network Systems in the Space of Stabilizing Graph Neural Network Policies***.
 
 Authors: John Cao, Luca Furieri
@@ -42,10 +41,12 @@ python -u onpolicy/scripts/train_mpe.py --use_valuenorm --use_popart \
 ## Testing
 Plot stability comparison:
 ```
+# Untrained policy
 python -m plot_scripts.compare_stability \
 --max_time_steps 100 \
 --use_disturbance
 
+# Trained policy
 python -m plot_scripts.compare_stability \
 --max_time_steps 100 \
 --use_trained_policy \
